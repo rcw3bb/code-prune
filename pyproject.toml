@@ -1,0 +1,30 @@
+[project]
+name = "code-prune"
+version = "1.0.0"
+description = "Find unreachable, unused, and obsolete code before it becomes technical debt."
+authors = [
+    {name = "Ron Webb"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.14"
+dependencies = [
+    "logenrich (>=1.0.1,<2.0.0)",
+    "env-dir-bootstrap (>=1.0.0,<2.0.0)"
+]
+
+[dependency-groups]
+dev = [
+    "black (>=26.5.1,<27.0.0)",
+    "pylint (>=4.0.5,<5.0.0)",
+    "pytest (>=9.0.3,<10.0.0)",
+    "pytest-cov (>=7.1.0,<8.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "code_prune"}]
+include = ["code_prune/logging.ini", "CHANGELOG.md"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
