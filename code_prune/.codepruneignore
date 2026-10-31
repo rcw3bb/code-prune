@@ -1,0 +1,9 @@
+# Gitignore-style patterns for files/directories to exclude from scanning.
+# One pattern per line. Lines starting with # are comments. Empty lines are ignored.
+.git/
+node_modules/
+dist/
+build/
+__pycache__/
+.venv/
+bin/

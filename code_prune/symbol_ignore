@@ -1,0 +1,18 @@
+# Regex patterns for symbol names to exclude from unused-code findings.
+# One pattern per line. Lines starting with # are comments. Empty lines are ignored.
+
+# Dunder / magic methods and common entry points
+^__.*__$
+^main$
+
+# Common test hooks and fixtures
+^[Tt]est
+^setUp$
+^tearDown$
+^setUpClass$
+^tearDownClass$
+
+# Commonly overridden object methods
+^toString$
+^equals$
+^hashCode$

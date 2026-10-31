@@ -15,9 +15,19 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 ## Tree
 
 - code_prune/ — main package; all new modules go here
-- code_prune/__init__.py — defines `__version__`, bootstraps `CONF_DIR` via `env-dir-bootstrap`
+- code_prune/__init__.py — defines `__version__`, bootstraps `CONF_DIR` via `env-dir-bootstrap`; exposes `PATH_IGNORE_PATH`/`SYMBOL_IGNORE_PATH`
 - code_prune/logging.ini — `logenrich` logging config, packaged as a resource (log file: `code_prune.log`)
+- code_prune/config.ini — `[override] ignore-file` setting, packaged as a resource
+- code_prune/.codepruneignore — bundled default gitignore-style path-ignore patterns
+- code_prune/symbol_ignore — bundled default regex symbol-name-ignore patterns (for unused-symbol findings)
+- code_prune/config.py — `Config` class reading `config.ini`
+- code_prune/parser.py — tree-sitter `Language`/`Parser` loader (Python, JavaScript, TypeScript, Java, Gosu)
+- code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + per-language node-type tables + all 5 detectors + `scan_file`
+- code_prune/store.py — SQLite `SessionStore` (findings/definitions/identifiers tables, cross-file unused-symbol aggregation)
+- code_prune/reporter.py — JSON/HTML `write_outputs`
+- code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`)
 - tests/ — test package, mirrors `code_prune/` structure; modules named `test_*.py`
+- tests/fixtures/cli_project/ — small multi-file fixture project for CLI end-to-end tests
 - .pylintrc — Pylint configuration (must score 10/10)
 - pyproject.toml — PEP 621 project metadata, `[dependency-groups] dev`, `[tool.poetry]` packages/include
 - CHANGELOG.md — Keep a Changelog format
@@ -50,4 +60,9 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 
 ### Session learnings
 
-(Notes will be added here as the AI learns from each task.)
+- Tree-sitter grammar node types/fields (e.g. import binding shape, dead
+  "false" condition representation, class-vs-method name field type) vary
+  subtly per language and should be verified empirically (parse a sample and
+  print the tree) before hard-coding node-type tables in `scanner.py`
+  (learned 11/1).
+
