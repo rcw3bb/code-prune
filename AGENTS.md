@@ -28,6 +28,8 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 - code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`)
 - tests/ — test package, mirrors `code_prune/` structure; modules named `test_*.py`
 - tests/fixtures/cli_project/ — small multi-file fixture project for CLI end-to-end tests
+- .github/workflows/tests.yml — CI: black --check, pylint, pytest (--cov-fail-under=80) on push/PR to any branch
+- .github/workflows/publish.yml — CI: build and publish to PyPI on push to main
 - .pylintrc — Pylint configuration (must score 10/10)
 - pyproject.toml — PEP 621 project metadata, `[dependency-groups] dev`, `[tool.poetry]` packages/include
 - CHANGELOG.md — Keep a Changelog format

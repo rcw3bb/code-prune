@@ -1,0 +1,45 @@
+name: publish
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: "2.2.0"
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Lock dependencies
+        run: poetry lock
+
+      - name: Install dependencies
+        run: poetry sync
+
+      - name: Run tests
+        run: poetry run pytest --cov=code_prune tests --cov-report term-missing
+
+      - name: Build package
+        run: poetry build
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
