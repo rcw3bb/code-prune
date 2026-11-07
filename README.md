@@ -50,6 +50,8 @@ pip install code-prune
 code-prune <path> [options]
 ```
 
+`<path>` may be a file, a directory, or several of them separated by `;`.
+
 Common options:
 
 | Option            | Description                                                                 |
@@ -73,8 +75,8 @@ code-prune src --categories unreachable,unused-import,todo-marker --format all
 
 Both report formats include the number of findings per category: the JSON
 report has a `category-counts` object, and the HTML report shows the counts in
-its summary and in a category dropdown filter listing the categories present
-in the report.
+a category dropdown filter listing the categories present in the report. The
+HTML summary line shows only the total number of findings.
 
 ## Configuration
 

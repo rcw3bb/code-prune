@@ -10,7 +10,7 @@ license = {file = "LICENSE"}
 requires-python = ">=3.14"
 keywords = ["cli", "static-analysis", "dead-code", "unused-code", "tree-sitter", "code-quality"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
