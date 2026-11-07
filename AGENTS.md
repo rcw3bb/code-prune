@@ -22,10 +22,10 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 - code_prune/symbol_ignore — bundled default regex symbol-name-ignore patterns (for unused-symbol findings)
 - code_prune/config.py — `Config` class reading `config.ini`
 - code_prune/parser.py — tree-sitter `Language`/`Parser` loader (Python, JavaScript, TypeScript, Java, Gosu)
-- code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + per-language node-type tables + all 5 detectors + `scan_file`
+- code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + per-language node-type tables + all detectors (unreachable, unused, obsolete, todo-marker, commented-out) + `scan_file`
 - code_prune/store.py — SQLite `SessionStore` (findings/definitions/identifiers tables, cross-file unused-symbol aggregation)
-- code_prune/reporter.py — JSON/HTML `write_outputs`
-- code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`)
+- code_prune/reporter.py — JSON/HTML `write_outputs` (per-category counts, HTML category dropdown)
+- code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`); file discovery honours config ignore + target-level `.codepruneignore`
 - tests/ — test package, mirrors `code_prune/` structure; modules named `test_*.py`
 - tests/fixtures/cli_project/ — small multi-file fixture project for CLI end-to-end tests
 - .github/workflows/tests.yml — CI: black --check, pylint, pytest (--cov-fail-under=80) on push/PR to any branch
@@ -67,4 +67,7 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
   subtly per language and should be verified empirically (parse a sample and
   print the tree) before hard-coding node-type tables in `scanner.py`
   (learned 11/1).
+- `--categories` takes concrete finding categories (`unused-import`, `unused-local`,
+  `unused-symbol`, ...); `unused` is only an alias expanded in `cli._parse_categories`
+  (learned 11/5).
 

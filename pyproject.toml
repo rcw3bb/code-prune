@@ -1,6 +1,6 @@
 [project]
 name = "code-prune"
-version = "1.0.0"
+version = "1.1.0"
 description = "Find unreachable, unused, and obsolete code before it becomes technical debt."
 authors = [
     {name = "Ron Webb"}
@@ -10,7 +10,7 @@ license = {file = "LICENSE"}
 requires-python = ">=3.14"
 keywords = ["cli", "static-analysis", "dead-code", "unused-code", "tree-sitter", "code-quality"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",

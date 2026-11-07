@@ -10,7 +10,7 @@ Since: 1.0.0
 from env_dir_bootstrap import EnvDirBootstrap
 
 __app_name__ = "code-prune"
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 _bootstrapper = EnvDirBootstrap(
     env_var="CODE_PRUNE_CONFIG_DIR",

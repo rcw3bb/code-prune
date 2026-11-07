@@ -41,6 +41,49 @@ def test_write_outputs_json_creates_file_with_expected_schema(tmp_path: Path) ->
     assert data["categories"] == ["unreachable"]
     assert len(data["findings"]) == 1
     assert data["findings"][0]["name"] == "x"
+    assert data["category-counts"] == {"unreachable": 1}
+
+
+def test_json_category_counts_include_each_category(tmp_path: Path) -> None:
+    """category-counts must count findings per category, zeros included."""
+    findings = [_finding("obsolete"), _finding("obsolete"), _finding("unreachable")]
+    written = write_outputs(
+        findings,
+        tmp_path,
+        "report",
+        "json",
+        paths_scanned=["src"],
+        categories=["obsolete", "todo-marker", "unreachable"],
+    )
+    data = json.loads(written[0].read_text(encoding="utf-8"))
+    assert data["category-counts"] == {
+        "obsolete": 2,
+        "todo-marker": 0,
+        "unreachable": 1,
+    }
+
+
+def test_html_category_filter_is_dropdown_of_available_categories(
+    tmp_path: Path,
+) -> None:
+    """The HTML category filter must be a <select> of categories with findings."""
+    written = write_outputs(
+        [_finding("obsolete"), _finding("obsolete"), _finding("unreachable")],
+        tmp_path,
+        "report",
+        "html",
+        paths_scanned=["src"],
+        categories=["obsolete", "todo-marker", "unreachable"],
+    )
+    html = written[0].read_text(encoding="utf-8")
+    assert '<select id="filter-category"' in html
+    assert '<option value="">All categories</option>' in html
+    assert '<option value="obsolete">obsolete (2)</option>' in html
+    assert '<option value="unreachable">unreachable (1)</option>' in html
+    assert 'value="todo-marker"' not in html
+    assert 'type="text" id="filter-category"' not in html
+    assert "Found 3 finding(s)</p>" in html
+    assert "obsolete: 2" not in html
 
 
 def test_write_outputs_html_creates_valid_html(tmp_path: Path) -> None:

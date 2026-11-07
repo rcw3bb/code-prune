@@ -35,10 +35,19 @@ from . import PATH_IGNORE_PATH
 from . import SYMBOL_IGNORE_PATH
 from .config import Config
 from .reporter import write_outputs
-from .scanner import CLI_CATEGORIES, load_name_ignore_patterns, scan_file
+from .scanner import (
+    CATEGORY_UNUSED_ALIAS,
+    CATEGORY_UNUSED_SYMBOL,
+    CLI_CATEGORIES,
+    SUPPORTED_EXTENSIONS,
+    UNUSED_CATEGORIES,
+    load_name_ignore_patterns,
+    scan_file,
+)
 from .store import SessionStore
 
 _VALID_FORMATS = ("json", "html", "all")
+_TARGET_IGNORE_FILENAME = ".codepruneignore"
 
 
 def _configure_stream_encoding(stream: object) -> None:
@@ -117,7 +126,10 @@ def _read_target_list(list_file: Path) -> list[Path]:
 def _parse_categories(raw: str) -> set[str]:
     """Parse a comma-separated category string into a validated set.
 
-    Raises :class:`click.UsageError` when an unknown category is given.
+    The ``unused`` alias is expanded into ``unused-import``, ``unused-local``
+    and ``unused-symbol``, so the returned set only holds concrete finding
+    categories. Raises :class:`click.UsageError` when an unknown category is
+    given.
 
     Author: Ron Webb
     Since: 1.0.0
@@ -129,6 +141,9 @@ def _parse_categories(raw: str) -> set[str]:
             f"Unknown categories: {', '.join(sorted(unknown))}. "
             f"Valid categories: {', '.join(CLI_CATEGORIES)}."
         )
+    if CATEGORY_UNUSED_ALIAS in requested:
+        requested.discard(CATEGORY_UNUSED_ALIAS)
+        requested.update(UNUSED_CATEGORIES)
     return requested
 
 
@@ -145,7 +160,7 @@ def _scan_and_store(task: tuple[Path, SessionStore, str, set[str]]) -> None:
     result = scan_file(file_path)
     findings = [f for f in result.findings if _category_enabled(f.category, categories)]
     store.insert_findings(session_id, findings)
-    if "unused" in categories:
+    if CATEGORY_UNUSED_SYMBOL in categories:
         store.insert_definitions(session_id, result.definitions)
     store.insert_identifiers(session_id, result.usages)
 
@@ -156,15 +171,7 @@ def _category_enabled(category: str, categories: set[str]) -> bool:
     Author: Ron Webb
     Since: 1.0.0
     """
-    if category == "unreachable":
-        return "unreachable" in categories
-    if category in ("unused-import", "unused-local", "unused-symbol"):
-        return "unused" in categories
-    if category == "obsolete":
-        return "obsolete" in categories
-    if category == "commented-out":
-        return "commented-out" in categories
-    return False
+    return category in categories
 
 
 def _load_ignore_file(ignore_path: Path, base_dir: Path) -> IgnoreFile | None:
@@ -207,8 +214,61 @@ def _build_ignore(base_dir: Path) -> IgnoreFile | None:
     return _load_ignore_file(Path(PATH_IGNORE_PATH), base_dir)
 
 
+class _CombinedIgnore:
+    """Path matcher that ignores a path when any wrapped matcher does.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+
+    def __init__(self, matchers: list[IgnoreFile]) -> None:
+        """Store the matchers to consult.
+
+        Author: Ron Webb
+        Since: 1.1.0
+        """
+        self._matchers = matchers
+
+    def is_ignored(self, path: Path) -> bool:
+        """Return whether any wrapped matcher ignores *path*.
+
+        Author: Ron Webb
+        Since: 1.1.0
+        """
+        return any(matcher.is_ignored(path) for matcher in self._matchers)
+
+
+def _build_target_ignore(target: Path) -> IgnoreFile | None:
+    """Build a matcher from the ``.codepruneignore`` located at *target*.
+
+    The file is looked up in *target* itself (or its parent for a file target)
+    under a fixed name, so it is not affected by ``config.ini``. Returns
+    ``None`` when there is no such file.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    base_dir = target if target.is_dir() else target.parent
+    ignore_path = base_dir / _TARGET_IGNORE_FILENAME
+    if not ignore_path.is_file():
+        return None
+    return _load_ignore_file(ignore_path, base_dir)
+
+
+def _build_combined_ignore(target: Path) -> _CombinedIgnore | None:
+    """Combine the configured ignore file with the target's ``.codepruneignore``.
+
+    The target-level file extends, rather than replaces, the configured one.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    matchers = [m for m in (_build_ignore(target), _build_target_ignore(target)) if m]
+    return _CombinedIgnore(matchers) if matchers else None
+
+
 def _walk_unignored(
-    root: Path, ignore: IgnoreFile | None
+    root: Path, ignore: IgnoreFile | _CombinedIgnore | None
 ) -> Generator[Path, None, None]:
     """Recursively yield files under *root*, pruning directories matched by *ignore*.
 
@@ -225,14 +285,16 @@ def _walk_unignored(
 
 
 def discover_files(
-    path: Path, extensions: list[str], ignore: IgnoreFile | None = None
+    path: Path,
+    extensions: list[str],
+    ignore: IgnoreFile | _CombinedIgnore | None = None,
 ) -> list[Path]:
-    """Discover files under *path* that match the given extensions.
+    """Discover supported source files under *path*.
 
-    When *extensions* is empty every file is included.
-    Both files and directories are accepted; for a plain file the extension
-    filter still applies. When *ignore* is given, matching files are skipped
-    and matching directories are pruned from the walk entirely.
+    Only files with an extension in :data:`SUPPORTED_EXTENSIONS` are returned;
+    when *extensions* is given it narrows that set further. Both files and
+    directories are accepted. When *ignore* is given, matching files are
+    skipped and matching directories are pruned from the walk entirely.
 
     Author: Ron Webb
     Since: 1.0.0
@@ -245,9 +307,12 @@ def discover_files(
     else:
         return []
 
-    if not extensions:
-        return candidates
-    return [f for f in candidates if f.suffix.lower() in extensions]
+    allowed = (
+        SUPPORTED_EXTENSIONS.intersection(extensions)
+        if extensions
+        else SUPPORTED_EXTENSIONS
+    )
+    return [f for f in candidates if f.suffix.lower() in allowed]
 
 
 def _run_concurrent_scan(
@@ -297,7 +362,7 @@ def _run_concurrent_scan(
     default="",
     help=(
         "Comma-separated file extensions to include "
-        "(e.g. py,java,js,ts,gs,gsx). Omit to scan all files."
+        "(e.g. py,java,js,ts,gs,gsx). Omit to scan every supported file."
     ),
 )
 @click.option(
@@ -352,8 +417,8 @@ def _run_concurrent_scan(
     help=(
         "Comma-separated categories to report: "
         f"{', '.join(CLI_CATEGORIES)} (default: all). "
-        "'unused' covers unused imports, local variables, and "
-        "cross-file-unused functions/classes/methods."
+        "'unused' is shorthand for unused-import, unused-local and "
+        "unused-symbol (cross-file unused functions/classes/methods)."
     ),
 )
 @click.option(
@@ -387,6 +452,11 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     _logger.info(_header)
     _console.print(f"[bold]{_header}[/bold]")
     extensions = _parse_extensions(ext) if ext else []
+    unsupported = sorted(set(extensions) - SUPPORTED_EXTENSIONS)
+    if unsupported:
+        _console.print(
+            f"[yellow]Ignoring unsupported extension(s): {', '.join(unsupported)}[/yellow]"
+        )
     selected_categories = _parse_categories(categories)
     paths = _parse_paths(path)
     if target_list:
@@ -438,7 +508,7 @@ def _discover_all_files(paths: list[Path], extensions: list[str]) -> list[Path]:
     files: list[Path] = []
     with _console.status("[bold cyan]Discovering files\u2026", spinner="dots"):
         for target_path in paths:
-            ignore = _build_ignore(target_path)
+            ignore = _build_combined_ignore(target_path)
             for found_file in discover_files(target_path, extensions, ignore):
                 if found_file not in seen:
                     seen.add(found_file)
@@ -461,7 +531,7 @@ def _scan_project(
     try:
         _run_concurrent_scan(files, store, session_id, workers, categories)
         findings = store.read_findings(session_id)
-        if "unused" in categories:
+        if CATEGORY_UNUSED_SYMBOL in categories:
             name_ignore_patterns = load_name_ignore_patterns(Path(SYMBOL_IGNORE_PATH))
             findings.extend(
                 store.compute_unused_symbols(session_id, name_ignore_patterns)

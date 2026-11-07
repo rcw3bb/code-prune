@@ -15,6 +15,7 @@ from braincraft.ignorefile import IgnoreFile
 from click.testing import CliRunner
 
 from code_prune import cli
+from code_prune.scanner import CLI_CATEGORIES, FINDING_CATEGORIES
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _CLI_PROJECT = _FIXTURES / "cli_project"
@@ -52,9 +53,26 @@ def test_read_target_list_skips_blank_and_comment_lines(tmp_path: Path) -> None:
 
 
 def test_parse_categories_defaults_to_all() -> None:
-    """All CLI categories should be accepted together."""
-    result = cli._parse_categories("unreachable,unused,obsolete,commented-out")
-    assert result == {"unreachable", "unused", "obsolete", "commented-out"}
+    """All CLI categories should be accepted together; 'unused' is expanded."""
+    result = cli._parse_categories(",".join(CLI_CATEGORIES))
+    assert result == set(FINDING_CATEGORIES)
+
+
+def test_parse_categories_expands_unused_alias() -> None:
+    """The blanket 'unused' alias must expand to the three unused-* categories."""
+    assert cli._parse_categories("unused") == {
+        "unused-import",
+        "unused-local",
+        "unused-symbol",
+    }
+
+
+@pytest.mark.parametrize(
+    "category", ["unused-import", "unused-local", "unused-symbol", "todo-marker"]
+)
+def test_parse_categories_accepts_explicit_category(category: str) -> None:
+    """Explicit unused-* and todo-marker categories must be selectable alone."""
+    assert cli._parse_categories(category) == {category}
 
 
 def test_parse_categories_rejects_unknown_category() -> None:
@@ -63,12 +81,12 @@ def test_parse_categories_rejects_unknown_category() -> None:
         cli._parse_categories("unreachable,bogus")
 
 
-def test_category_enabled_maps_unused_subcategories() -> None:
-    """unused-import/unused-local/unused-symbol should all map to 'unused'."""
-    categories = {"unused"}
+def test_category_enabled_is_plain_membership() -> None:
+    """A category is enabled only when it is explicitly selected."""
+    categories = {"unused-import"}
     assert cli._category_enabled("unused-import", categories)
-    assert cli._category_enabled("unused-local", categories)
-    assert cli._category_enabled("unused-symbol", categories)
+    assert not cli._category_enabled("unused-local", categories)
+    assert not cli._category_enabled("unused-symbol", categories)
     assert not cli._category_enabled("unreachable", categories)
 
 
@@ -101,6 +119,25 @@ def test_discover_files_extension_filter(tmp_path: Path) -> None:
 
     assert py_file in result
     assert txt_file not in result
+
+
+def test_discover_files_skips_unsupported_files(tmp_path: Path) -> None:
+    """Only supported source files are returned, even when --ext is empty."""
+    py_file = tmp_path / "app.py"
+    py_file.write_text("x = 1", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "image.png").write_bytes(b"\x89PNG")
+
+    assert cli.discover_files(tmp_path, []) == [py_file]
+    assert cli.discover_files(tmp_path / "notes.txt", []) == []
+
+
+def test_discover_files_unsupported_extension_filter_returns_nothing(
+    tmp_path: Path,
+) -> None:
+    """An --ext value that is not supported can never widen the result."""
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    assert cli.discover_files(tmp_path, [".txt"]) == []
 
 
 def test_discover_files_nonexistent_path_returns_empty(tmp_path: Path) -> None:
@@ -167,6 +204,53 @@ def test_build_ignore_falls_back_to_default_when_custom_missing(
 
     assert result is not None
     assert result.is_ignored(tmp_path / "app.log")
+
+
+def test_build_target_ignore_returns_none_without_file(tmp_path: Path) -> None:
+    """No .codepruneignore at the target means no extra matcher."""
+    assert cli._build_target_ignore(tmp_path) is None
+
+
+def test_build_target_ignore_independent_of_config(tmp_path: Path, monkeypatch) -> None:
+    """The target's .codepruneignore applies regardless of config.ini's setting."""
+    (tmp_path / ".codepruneignore").write_text("*.gen.py\n", encoding="utf-8")
+    monkeypatch.setattr(cli._config, "get_ignore_file", lambda: "custom.ignore")
+
+    result = cli._build_target_ignore(tmp_path)
+
+    assert result is not None
+    assert result.is_ignored(tmp_path / "x.gen.py")
+
+
+def test_build_target_ignore_uses_parent_for_file_target(tmp_path: Path) -> None:
+    """For a file target the .codepruneignore beside the file is used."""
+    target = tmp_path / "a.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".codepruneignore").write_text("a.py\n", encoding="utf-8")
+
+    result = cli._build_target_ignore(target)
+
+    assert result is not None
+    assert result.is_ignored(target)
+
+
+def test_combined_ignore_extends_configured_ignore(tmp_path: Path, monkeypatch) -> None:
+    """Both the configured and the target-level patterns must apply."""
+    conf_ignore = tmp_path / "conf" / "custom.ignore"
+    conf_ignore.parent.mkdir()
+    conf_ignore.write_text("*.log\n", encoding="utf-8")
+    target = tmp_path / "project"
+    target.mkdir()
+    (target / ".codepruneignore").write_text("*.tmp\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "CONF_DIR", str(conf_ignore.parent))
+    monkeypatch.setattr(cli._config, "get_ignore_file", lambda: "custom.ignore")
+
+    combined = cli._build_combined_ignore(target)
+
+    assert combined is not None
+    assert combined.is_ignored(target / "a.log")
+    assert combined.is_ignored(target / "a.tmp")
+    assert not combined.is_ignored(target / "a.py")
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +334,8 @@ def test_main_categories_flag_restricts_findings(tmp_path: Path) -> None:
     """Selecting only 'obsolete' should exclude unreachable-code findings."""
     sample = tmp_path / "a.py"
     sample.write_text(
-        "# TODO fix\ndef foo():\n    return 1\n    dead()\n", encoding="utf-8"
+        "# deprecated: use bar\ndef foo():\n    return 1\n    dead()\n",
+        encoding="utf-8",
     )
     out_dir = tmp_path / "out"
     runner = CliRunner()
@@ -264,6 +349,91 @@ def test_main_categories_flag_restricts_findings(tmp_path: Path) -> None:
     assert result.exit_code == 0
     categories_found = {f["category"] for f in data["findings"]}
     assert categories_found == {"obsolete"}
+    assert data["category-counts"] == {"obsolete": 1}
+
+
+def test_main_explicit_unused_import_category(tmp_path: Path) -> None:
+    """--categories unused-import must report only unused imports."""
+    (tmp_path / "a.py").write_text(
+        "import os\n\ndef orphan():\n    local = 1\n    return 2\n", encoding="utf-8"
+    )
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.main,
+        [str(tmp_path), "--output-dir", str(out_dir), "--categories", "unused-import"],
+    )
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert {f["category"] for f in data["findings"]} == {"unused-import"}
+    assert data["categories"] == ["unused-import"]
+
+
+def test_main_explicit_unused_symbol_category(tmp_path: Path) -> None:
+    """--categories unused-symbol must run only the cross-file symbol pass."""
+    (tmp_path / "a.py").write_text(
+        "import os\n\ndef orphan():\n    local = 1\n    return 2\n", encoding="utf-8"
+    )
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.main,
+        [str(tmp_path), "--output-dir", str(out_dir), "--categories", "unused-symbol"],
+    )
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert {f["category"] for f in data["findings"]} == {"unused-symbol"}
+
+
+def test_main_todo_marker_category(tmp_path: Path) -> None:
+    """TODO comments are reported as todo-marker, not obsolete."""
+    (tmp_path / "a.py").write_text("# TODO fix\nx = 1\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli.main,
+        [str(tmp_path), "--output-dir", str(out_dir), "--categories", "todo-marker"],
+    )
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert {f["category"] for f in data["findings"]} == {"todo-marker"}
+
+
+def test_main_warns_on_unsupported_extension(tmp_path: Path) -> None:
+    """An unsupported --ext value is reported and yields no files."""
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(cli.main, [str(tmp_path), "--ext", "txt"])
+
+    assert result.exit_code == 0
+    assert "unsupported" in result.output.lower()
+    assert "No files found" in result.output
+
+
+def test_main_target_codepruneignore_extends_ignore(tmp_path: Path) -> None:
+    """A .codepruneignore in the target directory must exclude matching files."""
+    (tmp_path / "kept.py").write_text("x = 1\n", encoding="utf-8")
+    skipped = tmp_path / "generated"
+    skipped.mkdir()
+    (skipped / "skip.py").write_text(
+        "def foo():\n    return 1\n    dead()\n", encoding="utf-8"
+    )
+    (tmp_path / ".codepruneignore").write_text("generated/\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+
+    result = runner.invoke(cli.main, [str(tmp_path), "--output-dir", str(out_dir)])
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert not any("skip.py" in f["file"] for f in data["findings"])
 
 
 def test_main_unknown_category_fails(tmp_path: Path) -> None:
