@@ -59,7 +59,7 @@ _CSS = """
   th.sortable.desc .sort-icon::after { content: '\\25bc'; }
   th.sortable:not(.asc):not(.desc) .sort-icon::after { content: '\\21c5'; opacity: 0.6; }
   .filter-row th { background: #1a3a5c; padding: 0.3em 1em 0.5em; }
-  .filter-row input {
+  .filter-row input, .filter-row select {
     width: 100%;
     padding: 0.3em 0.5em;
     border: 1px solid #3d6b9e;
@@ -70,7 +70,7 @@ _CSS = """
     outline: none;
   }
   .filter-row input::placeholder { color: #aac4e8; }
-  .filter-row input:focus { border-color: #7eb3e8; background: #255085; }
+  .filter-row input:focus, .filter-row select:focus { border-color: #7eb3e8; background: #255085; }
   td {
     padding: 0.6em 1em;
     border-bottom: 1px solid #e8ecf0;
@@ -93,6 +93,23 @@ _CSS = """
 """
 
 
+def _category_counts(
+    findings: list[dict[str, object]], categories: list[str]
+) -> dict[str, int]:
+    """Return the number of findings per category, sorted by category name.
+
+    Every selected category is present, with ``0`` when it has no findings.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    counts = dict.fromkeys(categories, 0)
+    for finding in findings:
+        category = str(finding["category"])
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _write_json(
     findings: list[dict[str, object]],
     path: Path,
@@ -111,12 +128,31 @@ def _write_json(
         "run-date": run_date,
         "paths-scanned": paths_scanned,
         "categories": categories,
+        "category-counts": _category_counts(findings, categories),
         "findings": findings,
     }
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
-def _build_thead_html() -> str:
+def _build_category_select(counts: dict[str, int]) -> str:
+    """Return the category ``<select>`` listing categories that have findings.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    options = ['<option value="">All categories</option>']
+    for category, count in counts.items():
+        if count:
+            escaped = _html.escape(category, quote=True)
+            options.append(f'<option value="{escaped}">{escaped} ({count})</option>')
+    return (
+        '<select id="filter-category" onchange="codePruneFilter()">'
+        + "".join(options)
+        + "</select>"
+    )
+
+
+def _build_thead_html(counts: dict[str, int]) -> str:
     """Return the HTML ``<thead>`` element with sortable headers and a filter row.
 
     Author: Ron Webb
@@ -133,8 +169,7 @@ def _build_thead_html() -> str:
         "</tr>\n"
         '      <tr class="filter-row">'
         "<th></th>"
-        '<th><input type="text" id="filter-category" placeholder="Filter category\u2026"'
-        ' oninput="codePruneFilter()"></th>'
+        f"<th>{_build_category_select(counts)}</th>"
         '<th><input type="text" id="filter-location" placeholder="Filter location\u2026"'
         ' oninput="codePruneFilter()"></th>'
         '<th><input type="text" id="filter-name" placeholder="Filter name\u2026"'
@@ -145,6 +180,15 @@ def _build_thead_html() -> str:
     )
 
 
+def _build_summary(total: int) -> str:
+    """Return the summary line with the total number of findings.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    return f"Found {total} finding(s)"
+
+
 def _build_html_scaffold(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     run_date: str,
     total: int,
@@ -152,13 +196,14 @@ def _build_html_scaffold(  # pylint: disable=too-many-arguments,too-many-positio
     script: str,
     paths_scanned: list[str],
     categories: list[str],
+    counts: dict[str, int],
 ) -> str:
     """Wrap the table body and script into a complete HTML document.
 
     Author: Ron Webb
     Since: 1.0.0
     """
-    thead = _build_thead_html()
+    thead = _build_thead_html(counts)
     paths_html = "<br>".join(_html.escape(p, quote=False) for p in paths_scanned)
     categories_html = (
         ", ".join(_html.escape(c, quote=False) for c in categories) or "(none)"
@@ -181,7 +226,7 @@ def _build_html_scaffold(  # pylint: disable=too-many-arguments,too-many-positio
         f"    <p>Paths scanned: {paths_html}</p>\n"
         f"    <p>Categories: {categories_html}</p>\n"
         "  </header>\n"
-        f'  <p class="summary">Found {total} finding(s)</p>\n'
+        f'  <p class="summary">{_build_summary(total)}</p>\n'
         '  <div class="table-wrap">\n'
         "  <table>\n"
         f"{thead}"
@@ -236,12 +281,12 @@ _SCRIPT = (
     "  }\n"
     "\n"
     "  function applyFilter() {\n"
-    "    var catFilter = document.getElementById('filter-category').value.toLowerCase();\n"
+    "    var catFilter = document.getElementById('filter-category').value;\n"
     "    var locFilter = document.getElementById('filter-location').value.toLowerCase();\n"
     "    var nameFilter = document.getElementById('filter-name').value.toLowerCase();\n"
     "    var tbody = document.querySelector('tbody');\n"
     "    tbody.querySelectorAll('tr').forEach(function (row) {\n"
-    "      var catMatch = !catFilter || row.dataset.category.toLowerCase().indexOf(catFilter) !== -1;\n"
+    "      var catMatch = !catFilter || row.dataset.category === catFilter;\n"
     "      var locMatch = !locFilter || row.dataset.location.toLowerCase().indexOf(locFilter) !== -1;\n"
     "      var nameMatch = !nameFilter || row.dataset.name.toLowerCase().indexOf(nameFilter) !== -1;\n"
     "      row.style.display = (catMatch && locMatch && nameMatch) ? '' : 'none';\n"
@@ -309,7 +354,13 @@ def _build_html(
         )
     rows_html = "\n".join(rows)
     return _build_html_scaffold(
-        run_date, len(findings), rows_html, _SCRIPT, paths_scanned, categories
+        run_date,
+        len(findings),
+        rows_html,
+        _SCRIPT,
+        paths_scanned,
+        categories,
+        _category_counts(findings, categories),
     )
 
 

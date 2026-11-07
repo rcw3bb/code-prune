@@ -11,10 +11,12 @@ from pathlib import Path
 from code_prune.scanner import (
     CATEGORY_COMMENTED_OUT,
     CATEGORY_OBSOLETE,
+    CATEGORY_TODO_MARKER,
     CATEGORY_UNREACHABLE,
     CATEGORY_UNUSED_IMPORT,
     CATEGORY_UNUSED_LOCAL,
     EXTENSION_TO_LANGUAGE,
+    SUPPORTED_EXTENSIONS,
     Finding,
     load_name_ignore_patterns,
     scan_file,
@@ -47,6 +49,11 @@ def test_extension_to_language_covers_all_five_languages() -> None:
     assert EXTENSION_TO_LANGUAGE[".java"] == "Java"
     assert EXTENSION_TO_LANGUAGE[".gs"] == "Gosu"
     assert EXTENSION_TO_LANGUAGE[".gsx"] == "Gosu"
+
+
+def test_supported_extensions_matches_language_map() -> None:
+    """SUPPORTED_EXTENSIONS must mirror EXTENSION_TO_LANGUAGE."""
+    assert SUPPORTED_EXTENSIONS == frozenset(EXTENSION_TO_LANGUAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +267,26 @@ def test_deprecated_annotation_flagged_gosu() -> None:
 
 
 def test_todo_comment_flagged_python() -> None:
-    """A TODO comment must be flagged obsolete."""
+    """A TODO comment must be flagged as a todo-marker, not obsolete."""
     src = b"# TODO: clean this up\ndef foo():\n    pass\n"
     result = scan_source(src, Path("a.py"), "Python")
-    assert "TODO" in _names_for(result.findings, CATEGORY_OBSOLETE)
+    assert "TODO" in _names_for(result.findings, CATEGORY_TODO_MARKER)
+    assert CATEGORY_OBSOLETE not in _categories(result.findings)
+
+
+def test_fixme_and_xxx_comments_flagged_as_todo_marker() -> None:
+    """FIXME and XXX comments must also be todo-markers."""
+    src = b"// FIXME broken\n// XXX hack\nfunction foo() {}\n"
+    result = scan_source(src, Path("a.js"), "JavaScript")
+    assert _names_for(result.findings, CATEGORY_TODO_MARKER) == ["FIXME", "XXX"]
+
+
+def test_deprecated_comment_flagged_obsolete_python() -> None:
+    """The word 'deprecated' in a comment stays in the obsolete category."""
+    src = b"# deprecated: use bar\ndef foo():\n    pass\n"
+    result = scan_source(src, Path("a.py"), "Python")
+    assert "DEPRECATED" in _names_for(result.findings, CATEGORY_OBSOLETE)
+    assert CATEGORY_TODO_MARKER not in _categories(result.findings)
 
 
 def test_jsdoc_deprecated_comment_flagged_typescript() -> None:
@@ -281,8 +304,82 @@ def test_plain_comment_not_flagged_obsolete_python() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Comments are never unreachable
+# ---------------------------------------------------------------------------
+
+
+def test_comment_after_return_not_unreachable_python() -> None:
+    """A comment after a terminating statement must not be flagged unreachable."""
+    src = b"def foo():\n    return 1\n    # trailing note\n"
+    result = scan_source(src, Path("a.py"), "Python")
+    assert CATEGORY_UNREACHABLE not in _categories(result.findings)
+
+
+def test_comment_after_return_not_unreachable_java_and_js() -> None:
+    """Line and block comments after return are ignored in brace languages."""
+    java = (
+        b"class A {\n  int f() {\n    return 1;\n    // note\n    /* more */\n  }\n}\n"
+    )
+    js = b"function f() {\n  return 1;\n  // note\n}\n"
+    assert CATEGORY_UNREACHABLE not in _categories(
+        scan_source(java, Path("A.java"), "Java").findings
+    )
+    assert CATEGORY_UNREACHABLE not in _categories(
+        scan_source(js, Path("a.js"), "JavaScript").findings
+    )
+
+
+def test_code_after_return_still_unreachable_with_comment_between() -> None:
+    """Real statements after a terminator (and a comment) remain unreachable."""
+    src = b"def foo():\n    return 1\n    # note\n    dead()\n"
+    result = scan_source(src, Path("a.py"), "Python")
+    assert _categories(result.findings).count(CATEGORY_UNREACHABLE) == 1
+
+
+# ---------------------------------------------------------------------------
 # Commented-out code
 # ---------------------------------------------------------------------------
+
+
+def test_javadoc_not_flagged_commented_out_java() -> None:
+    """Javadoc content that looks like code must not be flagged."""
+    src = (
+        b"class A {\n"
+        b"  /**\n   * Example:\n   * return foo();\n   * if (x) {\n   */\n"
+        b"  int f() { return 1; }\n}\n"
+    )
+    result = scan_source(src, Path("A.java"), "Java")
+    assert CATEGORY_COMMENTED_OUT not in _categories(result.findings)
+
+
+def test_jsdoc_not_flagged_commented_out_javascript() -> None:
+    """JSDoc content that looks like code must not be flagged."""
+    src = b"/**\n * const x = 1;\n * return x;\n */\nfunction f() { return 1; }\n"
+    result = scan_source(src, Path("a.js"), "JavaScript")
+    assert CATEGORY_COMMENTED_OUT not in _categories(result.findings)
+
+
+def test_gosu_doc_comment_not_flagged_commented_out() -> None:
+    """Gosu doc comments must not be flagged as commented-out code."""
+    src = b"class Foo {\n  /**\n   * return foo();\n   */\n  function f() {}\n}\n"
+    result = scan_source(src, Path("Foo.gs"), "Gosu")
+    assert CATEGORY_COMMENTED_OUT not in _categories(result.findings)
+
+
+def test_plain_block_comment_code_still_flagged_java() -> None:
+    """A regular (non-doc) block comment holding code is still flagged."""
+    src = b"class A {\n  /* return foo(); */\n  int f() { return 1; }\n}\n"
+    result = scan_source(src, Path("A.java"), "Java")
+    assert CATEGORY_COMMENTED_OUT in _categories(result.findings)
+
+
+def test_python_docstring_not_flagged_commented_out() -> None:
+    """A Python docstring containing code-like text is not a comment."""
+    src = (
+        b'def foo():\n    """\n    return bar()\n    import os\n    """\n    return 1\n'
+    )
+    result = scan_source(src, Path("a.py"), "Python")
+    assert CATEGORY_COMMENTED_OUT not in _categories(result.findings)
 
 
 def test_commented_out_function_flagged_python() -> None:

@@ -33,12 +33,38 @@ CATEGORY_UNUSED_IMPORT = "unused-import"
 CATEGORY_UNUSED_LOCAL = "unused-local"
 CATEGORY_UNUSED_SYMBOL = "unused-symbol"
 CATEGORY_OBSOLETE = "obsolete"
+CATEGORY_TODO_MARKER = "todo-marker"
 CATEGORY_COMMENTED_OUT = "commented-out"
 
-#: Categories a user may toggle via ``--categories``. ``unused`` expands to
-#: both :data:`CATEGORY_UNUSED_IMPORT`/:data:`CATEGORY_UNUSED_LOCAL` (per-file)
-#: and :data:`CATEGORY_UNUSED_SYMBOL` (cross-file).
-CLI_CATEGORIES = ("unreachable", "unused", "obsolete", "commented-out")
+#: Blanket ``--categories`` value that expands to every ``unused-*`` category.
+CATEGORY_UNUSED_ALIAS = "unused"
+
+#: Concrete ``unused-*`` finding categories covered by :data:`CATEGORY_UNUSED_ALIAS`.
+UNUSED_CATEGORIES = (
+    CATEGORY_UNUSED_IMPORT,
+    CATEGORY_UNUSED_LOCAL,
+    CATEGORY_UNUSED_SYMBOL,
+)
+
+#: Concrete finding categories (what appears in reports).
+FINDING_CATEGORIES = (
+    CATEGORY_UNREACHABLE,
+    *UNUSED_CATEGORIES,
+    CATEGORY_OBSOLETE,
+    CATEGORY_TODO_MARKER,
+    CATEGORY_COMMENTED_OUT,
+)
+
+#: Categories a user may toggle via ``--categories``. ``unused`` is an alias
+#: expanding to :data:`UNUSED_CATEGORIES`.
+CLI_CATEGORIES = (
+    CATEGORY_UNREACHABLE,
+    CATEGORY_UNUSED_ALIAS,
+    *UNUSED_CATEGORIES,
+    CATEGORY_OBSOLETE,
+    CATEGORY_TODO_MARKER,
+    CATEGORY_COMMENTED_OUT,
+)
 
 # --------------------------------------------------------------------------
 # Per-language grammar node-type tables (verified empirically against each
@@ -57,6 +83,9 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".gs": "Gosu",
     ".gsx": "Gosu",
 }
+
+#: File extensions the scanner can parse.
+SUPPORTED_EXTENSIONS = frozenset(EXTENSION_TO_LANGUAGE)
 
 #: Function/method definition node types, per language.
 FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
@@ -178,8 +207,11 @@ USAGE_NODE_TYPES: dict[str, frozenset[str]] = {
 #: optionally stripping surrounding parentheses added by some grammars).
 _FALSY_CONDITION_RE = re.compile(r"^\(*\s*(False|false|0)\s*\)*$")
 
-#: Regex matching obsolete markers inside comment text.
-_OBSOLETE_COMMENT_RE = re.compile(r"\b(TODO|FIXME|XXX|deprecated)\b", re.IGNORECASE)
+#: Regex matching TODO-style markers inside comment text.
+_TODO_COMMENT_RE = re.compile(r"\b(TODO|FIXME|XXX)\b", re.IGNORECASE)
+
+#: Regex matching deprecation markers inside comment text.
+_DEPRECATED_COMMENT_RE = re.compile(r"\b(deprecated)\b", re.IGNORECASE)
 
 #: Regex fragments that suggest a comment line contains commented-out code.
 _CODE_LIKE_RE = re.compile(
@@ -296,7 +328,12 @@ def detect_unreachable(
     for node in _iter_nodes(tree.root_node):
         if node.type in block_types:
             findings.extend(
-                _unreachable_after_terminator(node, terminating_types, file_path)
+                _unreachable_after_terminator(
+                    node,
+                    terminating_types,
+                    COMMENT_NODE_TYPES.get(language, frozenset()),
+                    file_path,
+                )
             )
         elif node.type == "if_statement":
             findings.extend(_unreachable_dead_branch(node, source_bytes, file_path))
@@ -305,15 +342,20 @@ def detect_unreachable(
 
 
 def _unreachable_after_terminator(
-    block: Node, terminating_types: frozenset[str], file_path: Path
+    block: Node,
+    terminating_types: frozenset[str],
+    comment_types: frozenset[str],
+    file_path: Path,
 ) -> list[Finding]:
     """Flag statements following a terminator within *block*.
+
+    Comment nodes are not statements and are never flagged.
 
     Author: Ron Webb
     Since: 1.0.0
     """
     findings: list[Finding] = []
-    statements = block.named_children
+    statements = [n for n in block.named_children if n.type not in comment_types]
     terminator_index: int | None = None
     for index, statement in enumerate(statements):
         if terminator_index is not None:
@@ -600,10 +642,34 @@ def _unused_binding_findings(
 # --------------------------------------------------------------------------
 
 
+def _marker_finding(
+    category: str, node: Node, file_path: Path, name: str, message: str
+) -> Finding:
+    """Build a :class:`Finding` located at the start of *node*.
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    row, col = node.start_point
+    return Finding(
+        category=category,
+        file_path=file_path,
+        line=row + 1,
+        column=col,
+        name=name,
+        message=message,
+    )
+
+
 def detect_obsolete_markers(
     tree: Tree, source_bytes: bytes, language: str, file_path: Path
 ) -> list[Finding]:
-    """Detect deprecation decorators/annotations and TODO/FIXME-style comments.
+    """Detect obsolete code markers.
+
+    Deprecation decorators/annotations and ``deprecated`` comments are reported
+    as :data:`CATEGORY_OBSOLETE`; ``TODO``/``FIXME``/``XXX`` comments, which are
+    not necessarily obsolete, are reported separately as
+    :data:`CATEGORY_TODO_MARKER`.
 
     Author: Ron Webb
     Since: 1.0.0
@@ -614,32 +680,38 @@ def detect_obsolete_markers(
 
     for node in _iter_nodes(tree.root_node):
         if decorator_types and node.type in decorator_types:
-            text = _decode(source_bytes, node)
-            if re.search(r"deprecated", text, re.IGNORECASE):
-                row, col = node.start_point
+            if re.search(r"deprecated", _decode(source_bytes, node), re.IGNORECASE):
                 findings.append(
-                    Finding(
-                        category=CATEGORY_OBSOLETE,
-                        file_path=file_path,
-                        line=row + 1,
-                        column=col,
-                        name=node.type,
-                        message="Deprecated marker found.",
+                    _marker_finding(
+                        CATEGORY_OBSOLETE,
+                        node,
+                        file_path,
+                        node.type,
+                        "Deprecated marker found.",
                     )
                 )
         elif node.type in comment_types:
             text = _decode(source_bytes, node)
-            match = _OBSOLETE_COMMENT_RE.search(text)
-            if match:
-                row, col = node.start_point
+            todo = _TODO_COMMENT_RE.search(text)
+            if todo:
                 findings.append(
-                    Finding(
-                        category=CATEGORY_OBSOLETE,
-                        file_path=file_path,
-                        line=row + 1,
-                        column=col,
-                        name=match.group(1).upper(),
-                        message=f"Obsolete marker '{match.group(1)}' found in comment.",
+                    _marker_finding(
+                        CATEGORY_TODO_MARKER,
+                        node,
+                        file_path,
+                        todo.group(1).upper(),
+                        f"Marker '{todo.group(1)}' found in comment.",
+                    )
+                )
+            deprecated = _DEPRECATED_COMMENT_RE.search(text)
+            if deprecated:
+                findings.append(
+                    _marker_finding(
+                        CATEGORY_OBSOLETE,
+                        node,
+                        file_path,
+                        deprecated.group(1).upper(),
+                        f"Obsolete marker '{deprecated.group(1)}' found in comment.",
                     )
                 )
     return findings
@@ -681,6 +753,16 @@ def _looks_like_code(text: str) -> bool:
     return stripped.endswith(("{", "}")) and len(stripped) > 1
 
 
+def _is_doc_comment(text: str) -> bool:
+    """Return ``True`` for ``/** ... */`` documentation comments (Javadoc/JSDoc).
+
+    Author: Ron Webb
+    Since: 1.1.0
+    """
+    stripped = text.lstrip()
+    return stripped.startswith("/**") and not stripped.startswith("/**/")
+
+
 def detect_commented_out_code(
     tree: Tree, source_bytes: bytes, language: str, file_path: Path
 ) -> list[Finding]:
@@ -696,7 +778,11 @@ def detect_commented_out_code(
     comment_types = COMMENT_NODE_TYPES.get(language, frozenset())
     if not comment_types:
         return []
-    comments = [n for n in _iter_nodes(tree.root_node) if n.type in comment_types]
+    comments = [
+        n
+        for n in _iter_nodes(tree.root_node)
+        if n.type in comment_types and not _is_doc_comment(_decode(source_bytes, n))
+    ]
     comments.sort(key=lambda n: n.start_point)
 
     findings: list[Finding] = []
