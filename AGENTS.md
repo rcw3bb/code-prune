@@ -23,6 +23,7 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 - code_prune/config.py — `Config` class reading `config.ini`
 - code_prune/parser.py — tree-sitter `Language`/`Parser` loader (Python, JavaScript, TypeScript, Java, Gosu)
 - code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + per-language node-type tables + all detectors (unreachable, unused, obsolete, todo-marker, commented-out) + `scan_file`
+- code_prune/searcher.py — `SymbolSearcher`: textual search of `--search-path` files to suppress unused-symbol findings (class = whole word, function = whole-word regex, own file skipped)
 - code_prune/store.py — SQLite `SessionStore` (findings/definitions/identifiers tables, cross-file unused-symbol aggregation)
 - code_prune/reporter.py — JSON/HTML `write_outputs` (per-category counts, HTML category dropdown)
 - code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`); file discovery honours config ignore + target-level `.codepruneignore`
@@ -70,4 +71,14 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 - `--categories` takes concrete finding categories (`unused-import`, `unused-local`,
   `unused-symbol`, ...); `unused` is only an alias expanded in `cli._parse_categories`
   (learned 11/5).
+- Search-path checks are injected into `SessionStore.compute_unused_symbols` as a
+  `SymbolSearcher` (batch `find_referenced`) so finding dicts/reports are unchanged;
+  `discover_files(..., restrict_to_supported=False)` is used for search paths
+  (learned 11/15).
+- `Definition.enclosing_class` (direct parent class of a method, reset across
+  nested functions) is threaded through `_collect_bindings`'s recursive walk,
+  the `definitions` SQLite table (with an `ALTER TABLE` fallback for reused
+  scratch DBs), and `SymbolSearcher`: a method candidate is only considered
+  referenced when both its own name and its class name match in the same
+  search file (learned 11/15).
 

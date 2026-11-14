@@ -205,6 +205,23 @@ def test_definitions_collected_for_function_and_class_python() -> None:
     assert kinds["method"] == "function"
 
 
+def test_method_definition_records_enclosing_class_python() -> None:
+    """A method's Definition must carry its directly enclosing class's name."""
+    src = (
+        b"def foo():\n    pass\n\n"
+        b"class Bar:\n"
+        b"    def method(self):\n"
+        b"        def nested():\n"
+        b"            pass\n"
+    )
+    result = scan_source(src, Path("a.py"), "Python")
+    enclosing = {d.name: d.enclosing_class for d in result.definitions}
+    assert enclosing["foo"] is None
+    assert enclosing["Bar"] is None
+    assert enclosing["method"] == "Bar"
+    assert enclosing["nested"] is None
+
+
 def test_usages_exclude_definition_name_nodes_python() -> None:
     """A definition's own name token must not count as a usage of itself."""
     src = b"def foo():\n    pass\n"

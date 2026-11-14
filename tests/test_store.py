@@ -178,6 +178,41 @@ def test_delete_session_clears_definitions_and_identifiers(tmp_path: Path) -> No
         store.close()
 
 
+def test_compute_unused_symbols_passes_enclosing_class_to_searcher(
+    tmp_path: Path,
+) -> None:
+    """A method definition's enclosing class must reach the searcher."""
+    store = SessionStore(tmp_path / "test.db")
+    seen: list[object] = []
+
+    class _RecordingSearcher:
+        """Stub searcher that records the candidates it was given."""
+
+        def find_referenced(self, candidates):
+            """Record *candidates* and report none of them as referenced."""
+            seen.extend(candidates)
+            return set()
+
+    try:
+        store.insert_definitions(
+            "s",
+            [
+                Definition(
+                    name="run",
+                    kind="function",
+                    file_path=Path("a.py"),
+                    line=1,
+                    column=0,
+                    enclosing_class="Job",
+                )
+            ],
+        )
+        store.compute_unused_symbols("s", [], _RecordingSearcher())
+        assert ("run", "function", "a.py", "Job") in seen
+    finally:
+        store.close()
+
+
 def test_insert_empty_lists_are_noop(tmp_path: Path) -> None:
     """Inserting empty lists should not raise and should produce no records."""
     store = SessionStore(tmp_path / "test.db")

@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 from .scanner import CATEGORY_UNUSED_SYMBOL, Definition, Finding
+from .searcher import SymbolSearcher
 
 _CREATE_FINDINGS_TABLE = (
     "CREATE TABLE IF NOT EXISTS findings ("
@@ -35,14 +36,16 @@ _CREATE_FINDINGS_TABLE = (
 )
 _CREATE_DEFINITIONS_TABLE = (
     "CREATE TABLE IF NOT EXISTS definitions ("
-    "    session_id TEXT NOT NULL,"
-    "    file_path  TEXT NOT NULL,"
-    "    line       INTEGER NOT NULL,"
-    "    col        INTEGER NOT NULL,"
-    "    name       TEXT NOT NULL,"
-    "    kind       TEXT NOT NULL"
+    "    session_id      TEXT NOT NULL,"
+    "    file_path       TEXT NOT NULL,"
+    "    line            INTEGER NOT NULL,"
+    "    col             INTEGER NOT NULL,"
+    "    name            TEXT NOT NULL,"
+    "    kind            TEXT NOT NULL,"
+    "    enclosing_class TEXT"
     ")"
 )
+_ADD_ENCLOSING_CLASS_COLUMN = "ALTER TABLE definitions ADD COLUMN enclosing_class TEXT"
 _CREATE_IDENTIFIERS_TABLE = (
     "CREATE TABLE IF NOT EXISTS identifiers ("
     "    session_id TEXT NOT NULL,"
@@ -65,8 +68,9 @@ _INSERT_FINDING = (
     " VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _INSERT_DEFINITION = (
-    "INSERT INTO definitions (session_id, file_path, line, col, name, kind)"
-    " VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO definitions"
+    " (session_id, file_path, line, col, name, kind, enclosing_class)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _INSERT_IDENTIFIER = "INSERT INTO identifiers (session_id, name) VALUES (?, ?)"
 
@@ -75,7 +79,7 @@ _SELECT_FINDINGS = (
     " WHERE session_id = ? ORDER BY file_path ASC, line ASC, col ASC"
 )
 _SELECT_UNUSED_DEFINITIONS = (
-    "SELECT d.file_path, d.line, d.col, d.name, d.kind"
+    "SELECT d.file_path, d.line, d.col, d.name, d.kind, d.enclosing_class"
     " FROM definitions d"
     " WHERE d.session_id = ?"
     " AND NOT EXISTS ("
@@ -121,10 +125,26 @@ class SessionStore:
             self._conn.execute(_CREATE_FINDINGS_TABLE)
             self._conn.execute(_CREATE_DEFINITIONS_TABLE)
             self._conn.execute(_CREATE_IDENTIFIERS_TABLE)
+            self._migrate_definitions_table()
             self._conn.execute(_CREATE_FINDINGS_INDEX)
             self._conn.execute(_CREATE_DEFINITIONS_INDEX)
             self._conn.execute(_CREATE_IDENTIFIERS_INDEX)
             self._conn.commit()
+
+    def _migrate_definitions_table(self) -> None:
+        """Add the ``enclosing_class`` column to a pre-1.2.0 ``definitions`` table.
+
+        The scratch database file is reused across runs, so a table created
+        by an older version may be missing this column.
+
+        Author: Ron Webb
+        Since: 1.2.0
+        """
+        columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(definitions)")
+        }
+        if "enclosing_class" not in columns:
+            self._conn.execute(_ADD_ENCLOSING_CLASS_COLUMN)
 
     def insert_findings(self, session_id: str, findings: list[Finding]) -> None:
         """Persist *findings* for *session_id* in the database.
@@ -157,7 +177,15 @@ class SessionStore:
         Since: 1.0.0
         """
         rows = [
-            (session_id, str(d.file_path), d.line, d.column, d.name, d.kind)
+            (
+                session_id,
+                str(d.file_path),
+                d.line,
+                d.column,
+                d.name,
+                d.kind,
+                d.enclosing_class,
+            )
             for d in definitions
         ]
         with self._lock:
@@ -196,14 +224,18 @@ class SessionStore:
         ]
 
     def compute_unused_symbols(
-        self, session_id: str, ignore_patterns: list[re.Pattern[str]]
+        self,
+        session_id: str,
+        ignore_patterns: list[re.Pattern[str]],
+        searcher: SymbolSearcher | None = None,
     ) -> list[dict[str, object]]:
         """Return a finding for every definition never referenced elsewhere.
 
         A definition is "unused" when its name never appears in the
         project-wide ``identifiers`` table collected for *session_id*. Names
         matching any of *ignore_patterns* (e.g. dunder methods, ``main``,
-        test hooks) are suppressed.
+        test hooks) are suppressed. When *searcher* is given, definitions that
+        it finds textually referenced in the search paths are suppressed too.
 
         Author: Ron Webb
         Since: 1.0.0
@@ -212,9 +244,20 @@ class SessionStore:
             rows = self._conn.execute(
                 _SELECT_UNUSED_DEFINITIONS, (session_id,)
             ).fetchall()
+        rows = [
+            row for row in rows if not any(p.search(row[3]) for p in ignore_patterns)
+        ]
+        referenced: set[tuple[str, str, str, str | None]] = set()
+        if searcher is not None:
+            referenced = searcher.find_referenced(
+                [
+                    (name, kind, file_path, enclosing_class)
+                    for file_path, _, _, name, kind, enclosing_class in rows
+                ]
+            )
         results: list[dict[str, object]] = []
-        for file_path, line, col, name, kind in rows:
-            if any(p.search(name) for p in ignore_patterns):
+        for file_path, line, col, name, kind, enclosing_class in rows:
+            if (name, kind, file_path, enclosing_class) in referenced:
                 continue
             results.append(
                 {
