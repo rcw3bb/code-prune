@@ -500,6 +500,124 @@ def test_main_cross_file_unused_symbol_resolved_across_project(tmp_path: Path) -
     assert "orphan" in unused_names
 
 
+def _unused_symbol_names(out_dir: Path) -> set[str]:
+    """Return the names of unused-symbol findings from the JSON report."""
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+    return {f["name"] for f in data["findings"] if f["category"] == "unused-symbol"}
+
+
+def _make_search_project(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a project with two orphan symbols and a search dir referencing them."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "a.py").write_text(
+        "class Widget:\n    pass\n\ndef orphan_fn():\n    return 1\n\n"
+        "def lonely():\n    return 2\n",
+        encoding="utf-8",
+    )
+    search = tmp_path / "search"
+    search.mkdir()
+    (search / "conf.xml").write_text("<x class='Widget'/>", encoding="utf-8")
+    (search / "usage.txt").write_text("orphan_fn()", encoding="utf-8")
+    return project, search
+
+
+def test_main_search_path_suppresses_referenced_symbols(tmp_path: Path) -> None:
+    """Symbols found textually in --search-path must not be reported."""
+    project, search = _make_search_project(tmp_path)
+    out_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        cli.main,
+        [str(project), "--output-dir", str(out_dir), "--search-path", str(search)],
+    )
+
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"lonely"}
+
+
+def test_main_search_ext_limits_searched_files(tmp_path: Path) -> None:
+    """--search-ext must restrict which files in --search-path are searched."""
+    project, search = _make_search_project(tmp_path)
+    out_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            str(project),
+            "--output-dir",
+            str(out_dir),
+            "--search-path",
+            f"{search / 'conf.xml'};{search / 'usage.txt'}",
+            "--search-ext",
+            "xml",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"orphan_fn", "lonely"}
+
+
+def test_main_without_search_path_reports_all_unused(tmp_path: Path) -> None:
+    """Without --search-path every unreferenced symbol is still reported."""
+    project, _ = _make_search_project(tmp_path)
+    out_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(cli.main, [str(project), "--output-dir", str(out_dir)])
+
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"Widget", "orphan_fn", "lonely"}
+
+
+def test_main_search_path_requires_class_and_method_together(tmp_path: Path) -> None:
+    """A method is suppressed only when its class and method names co-occur."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "a.py").write_text(
+        "class Job:\n    def run(self):\n        return 1\n", encoding="utf-8"
+    )
+    search = tmp_path / "search"
+    search.mkdir()
+    (search / "method_only.txt").write_text("run()", encoding="utf-8")
+    (search / "class_only.txt").write_text("Job()", encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    result = CliRunner().invoke(
+        cli.main,
+        [str(project), "--output-dir", str(out_dir), "--search-path", str(search)],
+    )
+
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"run"}
+
+    (search / "both.txt").write_text("Job().run()", encoding="utf-8")
+    result = CliRunner().invoke(
+        cli.main,
+        [str(project), "--output-dir", str(out_dir), "--search-path", str(search)],
+    )
+
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == set()
+
+
+def test_main_search_ext_requires_search_path(tmp_path: Path) -> None:
+    """--search-ext without --search-path is a usage error."""
+    result = CliRunner().invoke(cli.main, [str(tmp_path), "--search-ext", "xml"])
+
+    assert result.exit_code != 0
+    assert "--search-ext requires --search-path" in result.output
+
+
+def test_discover_files_unrestricted_accepts_any_extension(tmp_path: Path) -> None:
+    """With restrict_to_supported=False, empty extensions accept every file."""
+    note = tmp_path / "notes.txt"
+    note.write_text("x", encoding="utf-8")
+
+    assert cli.discover_files(tmp_path, [], None, False) == [note]
+    assert cli.discover_files(tmp_path, [".txt"], None, False) == [note]
+    assert cli.discover_files(tmp_path, [".xml"], None, False) == []
+
+
 def test_cli_command_scans_fixture_project(tmp_path: Path) -> None:
     """The full cli_project fixture should scan cleanly end to end."""
     out_dir = tmp_path / "out"

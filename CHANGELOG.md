@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 - 2026-11-15
+
+### Added
+
+- `--search-path`: files and/or directories (separated by `;`) searched
+  textually for each `unused-symbol` candidate. Symbols found there are no
+  longer reported. Classes and functions/methods are both matched with a
+  whole-word regex; a method additionally requires its enclosing class's name
+  to be found in the same file. The symbol's own file is ignored and
+  `.codepruneignore` rules apply.
+- `--search-ext`: extensions of the files searched in `--search-path`
+  (default: every text file). Requires `--search-path`.
+
 ## 1.1.0 - 2026-11-05
 
 ### Added

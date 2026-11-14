@@ -32,6 +32,8 @@ CATEGORY_UNREACHABLE = "unreachable"
 CATEGORY_UNUSED_IMPORT = "unused-import"
 CATEGORY_UNUSED_LOCAL = "unused-local"
 CATEGORY_UNUSED_SYMBOL = "unused-symbol"
+SYMBOL_KIND_CLASS = "class"
+SYMBOL_KIND_FUNCTION = "function"
 CATEGORY_OBSOLETE = "obsolete"
 CATEGORY_TODO_MARKER = "todo-marker"
 CATEGORY_COMMENTED_OUT = "commented-out"
@@ -242,6 +244,10 @@ class Finding:
 class Definition:
     """A function/class/method definition discovered in one file.
 
+    ``enclosing_class`` is the name of the class a method is directly
+    declared in (``None`` for classes and free functions); it lets search-path
+    matching require both the class and method names to appear together.
+
     Author: Ron Webb
     Since: 1.0.0
     """
@@ -251,6 +257,7 @@ class Definition:
     file_path: Path
     line: int
     column: int
+    enclosing_class: str | None = None
 
 
 @dataclass
@@ -513,7 +520,7 @@ def _collect_bindings(
     function_types = FUNCTION_NODE_TYPES.get(language, frozenset())
     class_types = CLASS_NODE_TYPES.get(language, frozenset())
 
-    def walk(node: Node, inside_function: bool) -> None:
+    def walk(node: Node, inside_function: bool, enclosing_class: str | None) -> None:
         if node.type in import_types:
             for name_node in _import_bound_name_nodes(node, language):
                 bindings.import_bindings.append(
@@ -528,25 +535,34 @@ def _collect_bindings(
                     (name_node, _decode(source_bytes, name_node))
                 )
                 bindings.excluded_positions.add(name_node.start_byte)
+        child_enclosing_class = enclosing_class
         if node.type in function_types or node.type in class_types:
             name_node = node.child_by_field_name("name")
+            is_class = node.type in class_types
+            kind = SYMBOL_KIND_CLASS if is_class else SYMBOL_KIND_FUNCTION
             if name_node is not None:
-                kind = "class" if node.type in class_types else "function"
+                decoded_name = _decode(source_bytes, name_node)
                 bindings.definitions.append(
                     Definition(
-                        name=_decode(source_bytes, name_node),
+                        name=decoded_name,
                         kind=kind,
                         file_path=file_path,
                         line=name_node.start_point[0] + 1,
                         column=name_node.start_point[1],
+                        enclosing_class=None if is_class else enclosing_class,
                     )
                 )
                 bindings.excluded_positions.add(name_node.start_byte)
+            # A method's body is local scope: nested definitions are not
+            # themselves direct members of the enclosing class.
+            child_enclosing_class = (
+                decoded_name if is_class and name_node is not None else None
+            )
             inside_function = inside_function or node.type in function_types
         for child in node.children:
-            walk(child, inside_function)
+            walk(child, inside_function, child_enclosing_class)
 
-    walk(tree.root_node, False)
+    walk(tree.root_node, False, None)
     return bindings
 
 

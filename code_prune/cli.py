@@ -44,6 +44,7 @@ from .scanner import (
     load_name_ignore_patterns,
     scan_file,
 )
+from .searcher import SymbolSearcher
 from .store import SessionStore
 
 _VALID_FORMATS = ("json", "html", "all")
@@ -288,11 +289,14 @@ def discover_files(
     path: Path,
     extensions: list[str],
     ignore: IgnoreFile | _CombinedIgnore | None = None,
+    restrict_to_supported: bool = True,
 ) -> list[Path]:
-    """Discover supported source files under *path*.
+    """Discover source files under *path*.
 
-    Only files with an extension in :data:`SUPPORTED_EXTENSIONS` are returned;
-    when *extensions* is given it narrows that set further. Both files and
+    By default only files with an extension in :data:`SUPPORTED_EXTENSIONS`
+    are returned and *extensions* narrows that set further. With
+    ``restrict_to_supported=False`` (used for search paths) *extensions* is
+    taken as-is and an empty list accepts every file. Both files and
     directories are accepted. When *ignore* is given, matching files are
     skipped and matching directories are pruned from the walk entirely.
 
@@ -307,11 +311,16 @@ def discover_files(
     else:
         return []
 
-    allowed = (
-        SUPPORTED_EXTENSIONS.intersection(extensions)
-        if extensions
-        else SUPPORTED_EXTENSIONS
-    )
+    if restrict_to_supported:
+        allowed = (
+            SUPPORTED_EXTENSIONS.intersection(extensions)
+            if extensions
+            else SUPPORTED_EXTENSIONS
+        )
+    elif not extensions:
+        return candidates
+    else:
+        allowed = frozenset(extensions)
     return [f for f in candidates if f.suffix.lower() in allowed]
 
 
@@ -432,6 +441,25 @@ def _run_concurrent_scan(
         "path list. Blank lines and lines starting with '#' are skipped."
     ),
 )
+@click.option(
+    "--search-path",
+    "search_path",
+    default="",
+    help=(
+        "Semicolon-separated files and/or directories searched textually for "
+        "each unused-symbol candidate. A symbol found there is not reported. "
+        "Classes are matched by name; functions/methods by a whole-word regex."
+    ),
+)
+@click.option(
+    "--search-ext",
+    "search_ext",
+    default="",
+    help=(
+        "Comma-separated extensions of the files to search in --search-path "
+        "(e.g. xml,json,py). Omit to search every text file."
+    ),
+)
 def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     path: str,
     ext: str,
@@ -442,6 +470,8 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     db_path: Path,
     categories: str,
     target_list: bool,
+    search_path: str,
+    search_ext: str,
 ) -> None:
     """Scan source files for unreachable, unused, and obsolete code.
 
@@ -458,6 +488,10 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             f"[yellow]Ignoring unsupported extension(s): {', '.join(unsupported)}[/yellow]"
         )
     selected_categories = _parse_categories(categories)
+    search_paths = _parse_paths(search_path)
+    search_extensions = _parse_extensions(search_ext)
+    if search_extensions and not search_paths:
+        raise click.UsageError("--search-ext requires --search-path.")
     paths = _parse_paths(path)
     if target_list:
         if len(paths) != 1 or not paths[0].is_file():
@@ -474,7 +508,10 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     _console.print(f"[bold]Scanning[/bold] {len(files)} file(s)\u2026")
 
-    findings, interrupted = _scan_project(files, db_path, workers, selected_categories)
+    searcher = _build_searcher(search_paths, search_extensions)
+    findings, interrupted = _scan_project(
+        files, db_path, workers, selected_categories, searcher
+    )
 
     if interrupted:
         raise SystemExit(1)
@@ -498,7 +535,9 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     )
 
 
-def _discover_all_files(paths: list[Path], extensions: list[str]) -> list[Path]:
+def _discover_all_files(
+    paths: list[Path], extensions: list[str], restrict_to_supported: bool = True
+) -> list[Path]:
     """Discover the de-duplicated set of files to scan across *paths*.
 
     Author: Ron Webb
@@ -509,15 +548,36 @@ def _discover_all_files(paths: list[Path], extensions: list[str]) -> list[Path]:
     with _console.status("[bold cyan]Discovering files\u2026", spinner="dots"):
         for target_path in paths:
             ignore = _build_combined_ignore(target_path)
-            for found_file in discover_files(target_path, extensions, ignore):
+            for found_file in discover_files(
+                target_path, extensions, ignore, restrict_to_supported
+            ):
                 if found_file not in seen:
                     seen.add(found_file)
                     files.append(found_file)
     return files
 
 
+def _build_searcher(
+    search_paths: list[Path], search_extensions: list[str]
+) -> SymbolSearcher | None:
+    """Build a :class:`SymbolSearcher` over *search_paths*, or ``None`` when unset.
+
+    Author: Ron Webb
+    Since: 1.2.0
+    """
+    if not search_paths:
+        return None
+    search_files = _discover_all_files(search_paths, search_extensions, False)
+    _logger.info("Searching %s file(s) for unused-symbol references", len(search_files))
+    return SymbolSearcher(search_files)
+
+
 def _scan_project(
-    files: list[Path], db_path: Path, workers: int, categories: set[str]
+    files: list[Path],
+    db_path: Path,
+    workers: int,
+    categories: set[str],
+    searcher: SymbolSearcher | None = None,
 ) -> tuple[list[dict[str, object]], bool]:
     """Run the full scan pipeline and return ``(findings, interrupted)``.
 
@@ -534,7 +594,7 @@ def _scan_project(
         if CATEGORY_UNUSED_SYMBOL in categories:
             name_ignore_patterns = load_name_ignore_patterns(Path(SYMBOL_IGNORE_PATH))
             findings.extend(
-                store.compute_unused_symbols(session_id, name_ignore_patterns)
+                store.compute_unused_symbols(session_id, name_ignore_patterns, searcher)
             )
     except KeyboardInterrupt:
         interrupted = True
