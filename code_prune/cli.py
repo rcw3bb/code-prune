@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import re
 import sys
 import tempfile
 import uuid
@@ -276,13 +277,15 @@ def _walk_unignored(
     Author: Ron Webb
     Since: 1.0.0
     """
-    for entry in root.iterdir():
-        if ignore is not None and ignore.is_ignored(entry):
-            continue
-        if entry.is_dir():
-            yield from _walk_unignored(entry, ignore)
-        elif entry.is_file():
-            yield entry
+    with os.scandir(root) as entries:
+        for entry in entries:
+            path = Path(entry.path)
+            if ignore is not None and ignore.is_ignored(path):
+                continue
+            if entry.is_dir():
+                yield from _walk_unignored(path, ignore)
+            elif entry.is_file():
+                yield path
 
 
 def discover_files(
@@ -324,6 +327,26 @@ def discover_files(
     return [f for f in candidates if f.suffix.lower() in allowed]
 
 
+def _build_progress() -> Progress:
+    """Return a :class:`~rich.progress.Progress` with the CLI's standard columns.
+
+    Shared by every long-running phase (file scanning, symbol search) so they
+    all render a spinner, bar, completed-count and elapsed time consistently.
+
+    Author: Ron Webb
+    Since: 1.4.0
+    """
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=_console,
+        transient=True,
+    )
+
+
 def _run_concurrent_scan(
     files: list[Path],
     store: SessionStore,
@@ -338,15 +361,7 @@ def _run_concurrent_scan(
     Author: Ron Webb
     Since: 1.0.0
     """
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=_console,
-        transient=True,
-    ) as progress:
+    with _build_progress() as progress:
         task = progress.add_task("[cyan]Scanning\u2026", total=len(files))
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
@@ -405,7 +420,8 @@ def _run_concurrent_scan(
     type=int,
     default=min(32, (os.cpu_count() or 1) + 4),
     help=(
-        "Number of parallel worker threads used to scan files "
+        "Number of parallel worker threads used to scan files and to read "
+        "--search-path files "
         "(default: min(32, cpu_count + 4))."
     ),
 )
@@ -508,7 +524,7 @@ def main(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     _console.print(f"[bold]Scanning[/bold] {len(files)} file(s)\u2026")
 
-    searcher = _build_searcher(search_paths, search_extensions)
+    searcher = _build_searcher(search_paths, search_extensions, workers)
     findings, interrupted = _scan_project(
         files, db_path, workers, selected_categories, searcher
     )
@@ -558,9 +574,11 @@ def _discover_all_files(
 
 
 def _build_searcher(
-    search_paths: list[Path], search_extensions: list[str]
+    search_paths: list[Path], search_extensions: list[str], workers: int = 1
 ) -> SymbolSearcher | None:
     """Build a :class:`SymbolSearcher` over *search_paths*, or ``None`` when unset.
+
+    *workers* is the number of threads used to read the search files.
 
     Author: Ron Webb
     Since: 1.2.0
@@ -569,7 +587,37 @@ def _build_searcher(
         return None
     search_files = _discover_all_files(search_paths, search_extensions, False)
     _logger.info("Searching %s file(s) for unused-symbol references", len(search_files))
-    return SymbolSearcher(search_files)
+    return SymbolSearcher(search_files, workers)
+
+
+def _compute_unused_symbols(
+    store: SessionStore,
+    session_id: str,
+    name_ignore_patterns: list[re.Pattern[str]],
+    searcher: SymbolSearcher | None,
+) -> list[dict[str, object]]:
+    """Resolve ``unused-symbol`` findings, reporting progress when *searcher* is set.
+
+    Without a search path this is instant (a single SQL anti-join), so no
+    progress bar is shown. With one, every search file has to be read
+    textually, which can take a while and would otherwise leave the CLI
+    looking unresponsive; a live progress bar is shown in that case.
+
+    Author: Ron Webb
+    Since: 1.4.0
+    """
+    if searcher is None:
+        return store.compute_unused_symbols(session_id, name_ignore_patterns)
+    with _build_progress() as progress:
+        task = progress.add_task(
+            "[cyan]Searching for symbol references\u2026", total=searcher.file_count
+        )
+        return store.compute_unused_symbols(
+            session_id,
+            name_ignore_patterns,
+            searcher,
+            on_progress=lambda: progress.advance(task),
+        )
 
 
 def _scan_project(
@@ -594,7 +642,9 @@ def _scan_project(
         if CATEGORY_UNUSED_SYMBOL in categories:
             name_ignore_patterns = load_name_ignore_patterns(Path(SYMBOL_IGNORE_PATH))
             findings.extend(
-                store.compute_unused_symbols(session_id, name_ignore_patterns, searcher)
+                _compute_unused_symbols(
+                    store, session_id, name_ignore_patterns, searcher
+                )
             )
     except KeyboardInterrupt:
         interrupted = True

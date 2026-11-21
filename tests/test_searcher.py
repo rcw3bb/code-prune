@@ -111,3 +111,108 @@ def test_binary_and_missing_files_are_skipped(tmp_path: Path) -> None:
     searcher = SymbolSearcher([binary, tmp_path / "missing.txt"])
 
     assert searcher.find_referenced([candidate]) == set()
+
+
+def test_file_count_reports_number_of_search_files(tmp_path: Path) -> None:
+    """file_count must report the number of files the searcher was built with."""
+    a = _write(tmp_path / "a.txt", "a")
+    b = _write(tmp_path / "b.txt", "b")
+
+    assert SymbolSearcher([a, b]).file_count == 2
+    assert SymbolSearcher([]).file_count == 0
+
+
+def test_on_progress_called_once_per_search_file(tmp_path: Path) -> None:
+    """on_progress fires once per search file, including skipped/binary ones."""
+    binary = tmp_path / "blob.bin"
+    binary.write_bytes(b"\x00")
+    missing = tmp_path / "missing.txt"
+    hit = _write(tmp_path / "hit.txt", "orphan")
+    candidate = ("orphan", "function", "src.py", None)
+    calls: list[None] = []
+
+    found = SymbolSearcher([binary, missing, hit]).find_referenced(
+        [candidate], on_progress=lambda: calls.append(None)
+    )
+
+    assert found == {candidate}
+    assert len(calls) == 3
+
+
+def test_on_progress_not_called_past_early_exit(tmp_path: Path) -> None:
+    """on_progress is not invoked for files after every candidate is resolved."""
+    hit = _write(tmp_path / "hit.txt", "orphan")
+    never_reached = _write(tmp_path / "never.txt", "orphan")
+    candidate = ("orphan", "function", "src.py", None)
+    calls: list[None] = []
+
+    SymbolSearcher([hit, never_reached]).find_referenced(
+        [candidate], on_progress=lambda: calls.append(None)
+    )
+
+    assert len(calls) == 1
+
+
+def test_parallel_workers_match_serial_results(tmp_path: Path) -> None:
+    """Multiple reader threads yield the same hits and one progress call per file."""
+    files = [_write(tmp_path / f"f{i}.txt", f"token{i} Job run") for i in range(25)]
+    candidates = [
+        ("token3", "class", "src.py", None),
+        ("token24", "class", "src.py", None),
+        ("run", "function", "src.py", "Job"),
+        ("absent", "class", "src.py", None),
+    ]
+    calls: list[None] = []
+
+    serial = SymbolSearcher(files).find_referenced(candidates)
+    parallel = SymbolSearcher(files, workers=4).find_referenced(
+        candidates, on_progress=lambda: calls.append(None)
+    )
+
+    assert parallel == serial == set(candidates[:3])
+    assert len(calls) == len(files)
+
+
+def test_parallel_workers_stop_after_last_candidate_resolved(tmp_path: Path) -> None:
+    """Early exit and ordered progress still hold with a thread pool."""
+    files = [_write(tmp_path / f"f{i}.txt", "orphan") for i in range(30)]
+    candidate = ("orphan", "function", "src.py", None)
+    calls: list[None] = []
+
+    found = SymbolSearcher(files, workers=4).find_referenced(
+        [candidate], on_progress=lambda: calls.append(None)
+    )
+
+    assert found == {candidate}
+    assert len(calls) == 1
+
+
+def test_names_with_non_word_characters_use_regex_fallback(tmp_path: Path) -> None:
+    """Names containing non-word characters are still matched as whole words."""
+    target = _write(tmp_path / "t.txt", "uses a-b here, but not a-bc")
+    hit = ("a-b", "function", "src.py", None)
+    miss = ("a-bd", "function", "src.py", None)
+
+    assert SymbolSearcher([target]).find_referenced([hit, miss]) == {hit}
+
+
+def test_candidate_found_in_later_file_after_own_file_skipped(tmp_path: Path) -> None:
+    """A candidate skipped in its own file is still resolved by another file."""
+    own = _write(tmp_path / "own.py", "def orphan(): pass")
+    other = _write(tmp_path / "other.txt", "orphan()")
+    candidate = ("orphan", "function", str(own), None)
+
+    assert SymbolSearcher([own, other], workers=2).find_referenced([candidate]) == {
+        candidate
+    }
+
+
+def test_no_candidates_reads_nothing(tmp_path: Path) -> None:
+    """Without candidates no file is considered and no progress is reported."""
+    only = _write(tmp_path / "a.txt", "x")
+    calls: list[None] = []
+
+    found = SymbolSearcher([only]).find_referenced([], lambda: calls.append(None))
+
+    assert found == set()
+    assert calls == []

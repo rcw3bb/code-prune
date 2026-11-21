@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from .scanner import CATEGORY_UNUSED_SYMBOL, Definition, Finding
@@ -228,6 +229,7 @@ class SessionStore:
         session_id: str,
         ignore_patterns: list[re.Pattern[str]],
         searcher: SymbolSearcher | None = None,
+        on_progress: Callable[[], None] | None = None,
     ) -> list[dict[str, object]]:
         """Return a finding for every definition never referenced elsewhere.
 
@@ -236,7 +238,9 @@ class SessionStore:
         project-wide ``identifiers`` table collected for *session_id*. Names
         matching any of *ignore_patterns* (e.g. dunder methods, ``main``,
         test hooks) are suppressed. When *searcher* is given, definitions that
-        it finds textually referenced in the search paths are suppressed too.
+        it finds textually referenced in the search paths are suppressed too;
+        *on_progress* (forwarded to the searcher) lets a caller drive a
+        progress indicator over that, potentially long-running, search.
 
         Author: Ron Webb
         Since: 1.0.0
@@ -250,12 +254,11 @@ class SessionStore:
         ]
         referenced: set[tuple[str, str, str, str | None]] = set()
         if searcher is not None:
-            referenced = searcher.find_referenced(
-                [
-                    (name, kind, file_path, enclosing_class)
-                    for file_path, _, _, name, kind, enclosing_class in rows
-                ]
-            )
+            candidates = [
+                (name, kind, file_path, enclosing_class)
+                for file_path, _, _, name, kind, enclosing_class in rows
+            ]
+            referenced = searcher.find_referenced(candidates, on_progress)
         results: list[dict[str, object]] = []
         for file_path, line, col, name, kind, enclosing_class in rows:
             if (name, kind, file_path, enclosing_class) in referenced:

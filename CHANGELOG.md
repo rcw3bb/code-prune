@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.0 - 2026-11-22
+
+### Changed
+
+- The `--search-path` textual symbol search now shows a live progress bar
+  (file count and elapsed time) while it reads through the search files,
+  instead of leaving the CLI apparently idle after the "Scanning" phase
+  finishes.
+- The `--search-path` search is much faster on large search sets: each file is
+  tokenized once and matched against all candidate names at once (instead of
+  testing every candidate against every file), and search files are read in
+  parallel using `--workers`. File discovery also uses `os.scandir`.
+
 ## 1.3.0 - 2026-11-16
 
 ### Added
