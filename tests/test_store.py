@@ -188,7 +188,7 @@ def test_compute_unused_symbols_passes_enclosing_class_to_searcher(
     class _RecordingSearcher:
         """Stub searcher that records the candidates it was given."""
 
-        def find_referenced(self, candidates):
+        def find_referenced(self, candidates, on_progress=None):
             """Record *candidates* and report none of them as referenced."""
             seen.extend(candidates)
             return set()
@@ -209,6 +209,35 @@ def test_compute_unused_symbols_passes_enclosing_class_to_searcher(
         )
         store.compute_unused_symbols("s", [], _RecordingSearcher())
         assert ("run", "function", "a.py", "Job") in seen
+    finally:
+        store.close()
+
+
+def test_compute_unused_symbols_forwards_on_progress_to_searcher(
+    tmp_path: Path,
+) -> None:
+    """compute_unused_symbols must forward on_progress through to the searcher."""
+    store = SessionStore(tmp_path / "test.db")
+    calls: list[object] = []
+
+    class _RecordingSearcher:
+        """Stub searcher that records the on_progress callback it receives."""
+
+        def find_referenced(self, candidates, on_progress=None):
+            """Invoke *on_progress* once and report nothing as referenced."""
+            calls.append(on_progress)
+            if on_progress is not None:
+                on_progress()
+            return set()
+
+    try:
+        store.insert_definitions("s", [_make_definition("orphan")])
+        progressed: list[int] = []
+        store.compute_unused_symbols(
+            "s", [], _RecordingSearcher(), on_progress=lambda: progressed.append(1)
+        )
+        assert len(calls) == 1
+        assert progressed == [1]
     finally:
         store.close()
 

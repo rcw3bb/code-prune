@@ -86,3 +86,9 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
   (`_BindingCollector` in `scanner.py`; Python `self.x` is tracked via
   `_Scope.owner_class`). Keep `scanner.py` under pylint's 1000-line limit by
   putting pure-data tables in `language_tables.py` (learned 11/16).
+- Long-running CLI phases get a live `rich.progress.Progress` bar (built via
+  shared `cli._build_progress()`) instead of a bare `_console.status` spinner,
+  so users see real file counts/elapsed time; `SymbolSearcher.find_referenced`
+  and `SessionStore.compute_unused_symbols` both take an optional
+  `on_progress` callback so the `--search-path` phase isn't silent on large
+  search paths (learned 11/22).

@@ -1,6 +1,6 @@
 [project]
 name = "code-prune"
-version = "1.3.0"
+version = "1.4.0"
 description = "Find unreachable, unused, and obsolete code before it becomes technical debt."
 authors = [
     {name = "Ron Webb"}
