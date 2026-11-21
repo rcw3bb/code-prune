@@ -15,11 +15,27 @@ import logging
 import re
 from collections import Counter
 from collections.abc import Generator, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from tree_sitter import Node, Tree  # type: ignore[import-untyped]
 
+from .language_tables import (
+    BLOCK_NODE_TYPES,
+    CLASS_NODE_TYPES,
+    COMMENT_NODE_TYPES,
+    DECORATOR_NODE_TYPES,
+    EXTENSION_TO_LANGUAGE,
+    FIELD_NAME_FIELD,
+    FIELD_NAME_NODE_TYPES,
+    FIELD_NODE_TYPES,
+    FUNCTION_NODE_TYPES,
+    IMPORT_NODE_TYPES,
+    LOCAL_DECL_NODE_TYPES,
+    PARAMETER_PROPERTY_MODIFIERS,
+    TERMINATING_STATEMENT_TYPES,
+    USAGE_NODE_TYPES,
+)
 from .parser import parse
 
 _logger = logging.getLogger(__name__)
@@ -34,6 +50,7 @@ CATEGORY_UNUSED_LOCAL = "unused-local"
 CATEGORY_UNUSED_SYMBOL = "unused-symbol"
 SYMBOL_KIND_CLASS = "class"
 SYMBOL_KIND_FUNCTION = "function"
+SYMBOL_KIND_FIELD = "field"
 CATEGORY_OBSOLETE = "obsolete"
 CATEGORY_TODO_MARKER = "todo-marker"
 CATEGORY_COMMENTED_OUT = "commented-out"
@@ -67,143 +84,6 @@ CLI_CATEGORIES = (
     CATEGORY_TODO_MARKER,
     CATEGORY_COMMENTED_OUT,
 )
-
-# --------------------------------------------------------------------------
-# Per-language grammar node-type tables (verified empirically against each
-# tree-sitter grammar before being hard-coded here).
-# --------------------------------------------------------------------------
-
-EXTENSION_TO_LANGUAGE: dict[str, str] = {
-    ".py": "Python",
-    ".pyi": "Python",
-    ".js": "JavaScript",
-    ".mjs": "JavaScript",
-    ".cjs": "JavaScript",
-    ".ts": "TypeScript",
-    ".tsx": "TypeScript",
-    ".java": "Java",
-    ".gs": "Gosu",
-    ".gsx": "Gosu",
-}
-
-#: File extensions the scanner can parse.
-SUPPORTED_EXTENSIONS = frozenset(EXTENSION_TO_LANGUAGE)
-
-#: Function/method definition node types, per language.
-FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"function_definition"}),
-    "JavaScript": frozenset(
-        {
-            "function_declaration",
-            "function_expression",
-            "arrow_function",
-            "method_definition",
-        }
-    ),
-    "TypeScript": frozenset(
-        {
-            "function_declaration",
-            "function_expression",
-            "arrow_function",
-            "method_definition",
-        }
-    ),
-    "Java": frozenset({"method_declaration", "constructor_declaration"}),
-    "Gosu": frozenset({"function_declaration", "constructor_declaration"}),
-}
-
-#: Class/interface definition node types, per language.
-CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"class_definition"}),
-    "JavaScript": frozenset({"class_declaration"}),
-    "TypeScript": frozenset({"class_declaration", "interface_declaration"}),
-    "Java": frozenset(
-        {"class_declaration", "interface_declaration", "enum_declaration"}
-    ),
-    "Gosu": frozenset({"class_declaration"}),
-}
-
-#: Import/uses-clause node types, per language.
-IMPORT_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"import_statement", "import_from_statement"}),
-    "JavaScript": frozenset({"import_statement"}),
-    "TypeScript": frozenset({"import_statement"}),
-    "Java": frozenset({"import_declaration"}),
-    "Gosu": frozenset({"uses_declaration"}),
-}
-
-#: Local-variable declaration/assignment node types, per language.
-LOCAL_DECL_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"assignment"}),
-    "JavaScript": frozenset({"variable_declarator"}),
-    "TypeScript": frozenset({"variable_declarator"}),
-    "Java": frozenset({"variable_declarator"}),
-    "Gosu": frozenset({"local_variable_declaration"}),
-}
-
-#: Statements that terminate control flow within a block, per language.
-TERMINATING_STATEMENT_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset(
-        {"return_statement", "raise_statement", "break_statement", "continue_statement"}
-    ),
-    "JavaScript": frozenset(
-        {"return_statement", "throw_statement", "break_statement", "continue_statement"}
-    ),
-    "TypeScript": frozenset(
-        {"return_statement", "throw_statement", "break_statement", "continue_statement"}
-    ),
-    "Java": frozenset(
-        {"return_statement", "throw_statement", "break_statement", "continue_statement"}
-    ),
-    "Gosu": frozenset(
-        {"return_statement", "throw_statement", "break_statement", "continue_statement"}
-    ),
-}
-
-#: Node types whose direct named children form a sequential statement list.
-BLOCK_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"block"}),
-    "JavaScript": frozenset({"statement_block"}),
-    "TypeScript": frozenset({"statement_block"}),
-    "Java": frozenset({"block"}),
-    "Gosu": frozenset({"statement_block"}),
-}
-
-#: Comment node types, per language.
-COMMENT_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"comment"}),
-    "JavaScript": frozenset({"comment"}),
-    "TypeScript": frozenset({"comment"}),
-    "Java": frozenset({"line_comment", "block_comment"}),
-    "Gosu": frozenset({"line_comment", "block_comment"}),
-}
-
-#: Decorator/annotation node types consulted for deprecation markers.
-DECORATOR_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"decorator"}),
-    "JavaScript": frozenset(),
-    "TypeScript": frozenset({"decorator"}),
-    "Java": frozenset({"marker_annotation", "annotation"}),
-    "Gosu": frozenset({"annotation"}),
-}
-
-#: Identifier-like node types counted as a "usage" of a name.
-USAGE_NODE_TYPES: dict[str, frozenset[str]] = {
-    "Python": frozenset({"identifier"}),
-    "JavaScript": frozenset(
-        {"identifier", "property_identifier", "shorthand_property_identifier"}
-    ),
-    "TypeScript": frozenset(
-        {
-            "identifier",
-            "property_identifier",
-            "shorthand_property_identifier",
-            "type_identifier",
-        }
-    ),
-    "Java": frozenset({"identifier", "type_identifier"}),
-    "Gosu": frozenset({"identifier"}),
-}
 
 #: Regex matching a condition expression that is always false (after
 #: optionally stripping surrounding parentheses added by some grammars).
@@ -242,11 +122,11 @@ class Finding:
 
 @dataclass(frozen=True)
 class Definition:
-    """A function/class/method definition discovered in one file.
+    """A function/class/method/field definition discovered in one file.
 
-    ``enclosing_class`` is the name of the class a method is directly
+    ``enclosing_class`` is the name of the class a method or field is directly
     declared in (``None`` for classes and free functions); it lets search-path
-    matching require both the class and method names to appear together.
+    matching require both the class and member names to appear together.
 
     Author: Ron Webb
     Since: 1.0.0
@@ -506,64 +386,249 @@ def _local_bound_name_node(decl_node: Node, language: str) -> Node | None:
     return None
 
 
+def _field_name_nodes(node: Node, language: str) -> list[Node]:
+    """Return the name nodes declared by the field *node*.
+
+    Java ``field_declaration`` may declare several variables. A Gosu field with
+    an ``as`` alias is exposed as a property and is therefore never a candidate.
+
+    Author: Ron Webb
+    Since: 1.3.0
+    """
+    if language == "Java" and node.type == "field_declaration":
+        names = [
+            declarator.child_by_field_name("name")
+            for declarator in node.children_by_field_name("declarator")
+        ]
+    elif language == "Gosu" and node.child_by_field_name("alias") is not None:
+        names = []
+    else:
+        names = [node.child_by_field_name(FIELD_NAME_FIELD.get(language, "name"))]
+    return [n for n in names if n is not None and n.type in FIELD_NAME_NODE_TYPES]
+
+
+def _parameter_property_name_nodes(function_node: Node) -> list[Node]:
+    """Return the names of TypeScript constructor parameter properties.
+
+    ``constructor(private q: number)`` declares the field ``q``.
+
+    Author: Ron Webb
+    Since: 1.3.0
+    """
+    parameters = function_node.child_by_field_name("parameters")
+    if parameters is None:
+        return []
+    names: list[Node] = []
+    for param in parameters.named_children:
+        is_property = any(
+            c.type in PARAMETER_PROPERTY_MODIFIERS for c in param.children
+        )
+        pattern = param.child_by_field_name("pattern")
+        if is_property and pattern is not None and pattern.type == "identifier":
+            names.append(pattern)
+    return names
+
+
+def _self_attribute_name_node(assign_node: Node, source_bytes: bytes) -> Node | None:
+    """Return the ``x`` node of a Python ``self.x = ...`` assignment, if any.
+
+    Author: Ron Webb
+    Since: 1.3.0
+    """
+    left = assign_node.child_by_field_name("left")
+    if left is None or left.type != "attribute":
+        return None
+    target = left.child_by_field_name("object")
+    if target is None or _decode(source_bytes, target) != "self":
+        return None
+    return left.child_by_field_name("attribute")
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """Lexical position of the node being visited during the binding walk.
+
+    ``enclosing_class`` is the class a node is a *direct* member of (reset by
+    nested functions); ``owner_class`` is the nearest lexically enclosing class
+    regardless of functions, used for Python ``self.x`` attributes.
+
+    Author: Ron Webb
+    Since: 1.3.0
+    """
+
+    inside_function: bool = False
+    enclosing_class: str | None = None
+    owner_class: str | None = None
+
+
+class _BindingCollector:
+    """Walk a tree once, collecting import/local/definition bindings.
+
+    Author: Ron Webb
+    Since: 1.3.0
+    """
+
+    def __init__(self, source_bytes: bytes, language: str, file_path: Path) -> None:
+        """Store the file being walked.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        self._source = source_bytes
+        self._language = language
+        self._file_path = file_path
+        self._seen_fields: set[tuple[str, str]] = set()
+        self.bindings = _Bindings()
+
+    def walk(self, node: Node, scope: _Scope) -> None:
+        """Visit *node* and its descendants, recording bindings.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        language = self._language
+        if node.type in IMPORT_NODE_TYPES.get(language, frozenset()):
+            self._record_imports(node)
+            return
+        if (
+            node.type in LOCAL_DECL_NODE_TYPES.get(language, frozenset())
+            and scope.inside_function
+        ):
+            self._record_local(node)
+        self._record_fields(node, scope)
+        child_scope = scope
+        if node.type in FUNCTION_NODE_TYPES.get(
+            language, frozenset()
+        ) or node.type in CLASS_NODE_TYPES.get(language, frozenset()):
+            child_scope = self._record_definition(node, scope)
+        elif node.type in FIELD_NODE_TYPES.get(language, frozenset()):
+            child_scope = replace(scope, enclosing_class=None)
+        for child in node.children:
+            self.walk(child, child_scope)
+
+    def _record_imports(self, node: Node) -> None:
+        """Record the names bound by the import *node*.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        for name_node in _import_bound_name_nodes(node, self._language):
+            self.bindings.import_bindings.append(
+                (name_node, _decode(self._source, name_node))
+            )
+            self.bindings.excluded_positions.add(name_node.start_byte)
+
+    def _record_local(self, node: Node) -> None:
+        """Record the local variable bound by the declaration *node*.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        name_node = _local_bound_name_node(node, self._language)
+        if name_node is not None:
+            self.bindings.local_bindings.append(
+                (name_node, _decode(self._source, name_node))
+            )
+            self.bindings.excluded_positions.add(name_node.start_byte)
+
+    def _record_definition(self, node: Node, scope: _Scope) -> _Scope:
+        """Record a function/class definition and return the scope of its body.
+
+        A method's body is local scope: nested definitions are not themselves
+        direct members of the enclosing class.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        is_class = node.type in CLASS_NODE_TYPES.get(self._language, frozenset())
+        name_node = node.child_by_field_name("name")
+        class_name: str | None = None
+        if name_node is not None:
+            decoded_name = _decode(self._source, name_node)
+            class_name = decoded_name if is_class else None
+            self.bindings.definitions.append(
+                Definition(
+                    name=decoded_name,
+                    kind=SYMBOL_KIND_CLASS if is_class else SYMBOL_KIND_FUNCTION,
+                    file_path=self._file_path,
+                    line=name_node.start_point[0] + 1,
+                    column=name_node.start_point[1],
+                    enclosing_class=None if is_class else scope.enclosing_class,
+                )
+            )
+            self.bindings.excluded_positions.add(name_node.start_byte)
+        return _Scope(
+            inside_function=scope.inside_function or not is_class,
+            enclosing_class=class_name,
+            owner_class=class_name if is_class and class_name else scope.owner_class,
+        )
+
+    def _record_fields(self, node: Node, scope: _Scope) -> None:
+        """Record any field/attribute declared by *node*.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        language = self._language
+        if scope.enclosing_class is not None:
+            if node.type in FIELD_NODE_TYPES.get(language, frozenset()):
+                self._add_fields(
+                    _field_name_nodes(node, language), scope.enclosing_class
+                )
+            elif language == "TypeScript" and node.type in FUNCTION_NODE_TYPES.get(
+                language, frozenset()
+            ):
+                self._add_fields(
+                    _parameter_property_name_nodes(node), scope.enclosing_class
+                )
+        if (
+            language == "Python"
+            and node.type == "assignment"
+            and scope.inside_function
+            and scope.owner_class is not None
+        ):
+            name_node = _self_attribute_name_node(node, self._source)
+            if name_node is not None:
+                self._add_fields([name_node], scope.owner_class)
+
+    def _add_fields(self, name_nodes: list[Node], class_name: str) -> None:
+        """Record each of *name_nodes* as a field of *class_name*.
+
+        Every declaration position is excluded from usages; only the first
+        declaration of a field yields a :class:`Definition`.
+
+        Author: Ron Webb
+        Since: 1.3.0
+        """
+        for name_node in name_nodes:
+            self.bindings.excluded_positions.add(name_node.start_byte)
+            decoded_name = _decode(self._source, name_node)
+            if (class_name, decoded_name) in self._seen_fields:
+                continue
+            self._seen_fields.add((class_name, decoded_name))
+            self.bindings.definitions.append(
+                Definition(
+                    name=decoded_name,
+                    kind=SYMBOL_KIND_FIELD,
+                    file_path=self._file_path,
+                    line=name_node.start_point[0] + 1,
+                    column=name_node.start_point[1],
+                    enclosing_class=class_name,
+                )
+            )
+
+
 def _collect_bindings(
     tree: Tree, source_bytes: bytes, language: str, file_path: Path
 ) -> _Bindings:
-    """Walk *tree* once, collecting import/local/definition bindings.
+    """Walk *tree* once, collecting import/local/definition/field bindings.
 
     Author: Ron Webb
     Since: 1.0.0
     """
-    bindings = _Bindings()
-    import_types = IMPORT_NODE_TYPES.get(language, frozenset())
-    local_types = LOCAL_DECL_NODE_TYPES.get(language, frozenset())
-    function_types = FUNCTION_NODE_TYPES.get(language, frozenset())
-    class_types = CLASS_NODE_TYPES.get(language, frozenset())
-
-    def walk(node: Node, inside_function: bool, enclosing_class: str | None) -> None:
-        if node.type in import_types:
-            for name_node in _import_bound_name_nodes(node, language):
-                bindings.import_bindings.append(
-                    (name_node, _decode(source_bytes, name_node))
-                )
-                bindings.excluded_positions.add(name_node.start_byte)
-            return
-        if node.type in local_types and inside_function:
-            name_node = _local_bound_name_node(node, language)
-            if name_node is not None:
-                bindings.local_bindings.append(
-                    (name_node, _decode(source_bytes, name_node))
-                )
-                bindings.excluded_positions.add(name_node.start_byte)
-        child_enclosing_class = enclosing_class
-        if node.type in function_types or node.type in class_types:
-            name_node = node.child_by_field_name("name")
-            is_class = node.type in class_types
-            kind = SYMBOL_KIND_CLASS if is_class else SYMBOL_KIND_FUNCTION
-            if name_node is not None:
-                decoded_name = _decode(source_bytes, name_node)
-                bindings.definitions.append(
-                    Definition(
-                        name=decoded_name,
-                        kind=kind,
-                        file_path=file_path,
-                        line=name_node.start_point[0] + 1,
-                        column=name_node.start_point[1],
-                        enclosing_class=None if is_class else enclosing_class,
-                    )
-                )
-                bindings.excluded_positions.add(name_node.start_byte)
-            # A method's body is local scope: nested definitions are not
-            # themselves direct members of the enclosing class.
-            child_enclosing_class = (
-                decoded_name if is_class and name_node is not None else None
-            )
-            inside_function = inside_function or node.type in function_types
-        for child in node.children:
-            walk(child, inside_function, child_enclosing_class)
-
-    walk(tree.root_node, False, None)
-    return bindings
+    collector = _BindingCollector(source_bytes, language, file_path)
+    collector.walk(tree.root_node, _Scope())
+    return collector.bindings
 
 
 def _collect_usage_names(

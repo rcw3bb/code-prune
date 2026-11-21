@@ -1,6 +1,6 @@
 # code-prune
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/rcw3bb/code-prune/blob/main/LICENSE) [![Version](https://img.shields.io/badge/Version-1.2.0-green.svg)](https://github.com/rcw3bb/code-prune/blob/main/CHANGELOG.md) [![Python](https://img.shields.io/badge/Python-3.14%2B-blue)](https://www.python.org/) [![PyPI](https://img.shields.io/badge/PyPI-code--prune-orange)](https://pypi.org/project/code-prune/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/rcw3bb/code-prune/blob/main/LICENSE) [![Version](https://img.shields.io/badge/Version-1.3.0-green.svg)](https://github.com/rcw3bb/code-prune/blob/main/CHANGELOG.md) [![Python](https://img.shields.io/badge/Python-3.14%2B-blue)](https://www.python.org/) [![PyPI](https://img.shields.io/badge/PyPI-code--prune-orange)](https://pypi.org/project/code-prune/)
 
 
 A CLI tool that scans a codebase for unreachable, unused, and obsolete code,
@@ -17,8 +17,11 @@ TypeScript, Java, and Gosu**:
   (`False`/`false`/`0`). Comments are never reported as unreachable.
 - **Unused imports & local variables** — per-file, syntactic detection of
   bindings that are never referenced again in the same file.
-- **Unused functions/classes/methods** — cross-file detection of definitions
-  that are never referenced anywhere in the scanned project.
+- **Unused functions/classes/methods/fields** — cross-file detection of
+  definitions that are never referenced anywhere in the scanned project. Fields
+  cover class-level fields in every language, Python `self.x` attributes,
+  JavaScript `#private` fields, TypeScript interface properties and constructor
+  parameter properties, and Java enum constants.
 - **Obsolete markers** — `@deprecated`/`@Deprecated`-style decorators and
   annotations, plus comments mentioning `deprecated`.
 - **TODO markers** — `TODO`/`FIXME`/`XXX` comment tags (not necessarily
@@ -64,7 +67,7 @@ Common options:
 | `--workers`       | Number of parallel worker threads used to scan files.                      |
 | `--db`            | Path to the SQLite scratch database used during a scan run.                |
 | `--target-list`   | Treat `path` as a file listing target paths, one per line.                 |
-| `--search-path`   | Files and/or directories (separated by `;`) searched textually for each `unused-symbol` candidate; a symbol found there is not reported. Classes and functions/methods are both matched by a whole-word regex; a method additionally requires its enclosing class's name to appear in the same file. The symbol's own file is skipped and `.codepruneignore` rules apply. |
+| `--search-path`   | Files and/or directories (separated by `;`) searched textually for each `unused-symbol` candidate; a symbol found there is not reported. Classes, functions/methods and fields are all matched by a whole-word regex; a method or field additionally requires its enclosing class's name to appear in the same file. The symbol's own file is skipped and `.codepruneignore` rules apply. |
 | `--search-ext`    | Comma-separated extensions of the files searched in `--search-path` (e.g. `xml,json`). Omit to search every text file. Requires `--search-path`. |
 
 Example:
@@ -105,8 +108,8 @@ It always uses that fixed name and is not affected by `config.ini`.
 ### Ignoring symbol names
 
 `symbol_ignore` holds one regex pattern per line, matched against symbol
-names to suppress from "unused function/class/method" findings — useful for
-dunder methods, `main`, test hooks (`test_*`, `setUp`), and similar
+names to suppress from "unused function/class/method/field" findings — useful for
+dunder methods, `main`, test hooks (`test_*`, `setUp`), `serialVersionUID`, and similar
 intentionally-unreferenced symbols.
 
 ## Development

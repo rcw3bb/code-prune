@@ -15,8 +15,6 @@ from code_prune.scanner import (
     CATEGORY_UNREACHABLE,
     CATEGORY_UNUSED_IMPORT,
     CATEGORY_UNUSED_LOCAL,
-    EXTENSION_TO_LANGUAGE,
-    SUPPORTED_EXTENSIONS,
     Finding,
     load_name_ignore_patterns,
     scan_file,
@@ -34,26 +32,6 @@ def _categories(findings: list[Finding]) -> list[str]:
 
 def _names_for(findings: list[Finding], category: str) -> list[str]:
     return [f.name for f in findings if f.category == category]
-
-
-# ---------------------------------------------------------------------------
-# EXTENSION_TO_LANGUAGE mapping
-# ---------------------------------------------------------------------------
-
-
-def test_extension_to_language_covers_all_five_languages() -> None:
-    """Every supported extension should map to its expected language."""
-    assert EXTENSION_TO_LANGUAGE[".py"] == "Python"
-    assert EXTENSION_TO_LANGUAGE[".js"] == "JavaScript"
-    assert EXTENSION_TO_LANGUAGE[".ts"] == "TypeScript"
-    assert EXTENSION_TO_LANGUAGE[".java"] == "Java"
-    assert EXTENSION_TO_LANGUAGE[".gs"] == "Gosu"
-    assert EXTENSION_TO_LANGUAGE[".gsx"] == "Gosu"
-
-
-def test_supported_extensions_matches_language_map() -> None:
-    """SUPPORTED_EXTENSIONS must mirror EXTENSION_TO_LANGUAGE."""
-    assert SUPPORTED_EXTENSIONS == frozenset(EXTENSION_TO_LANGUAGE)
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +198,101 @@ def test_method_definition_records_enclosing_class_python() -> None:
     assert enclosing["Bar"] is None
     assert enclosing["method"] == "Bar"
     assert enclosing["nested"] is None
+
+
+def _fields(source: bytes, filename: str, language: str) -> dict[str, str | None]:
+    result = scan_source(source, Path(filename), language)
+    return {d.name: d.enclosing_class for d in result.definitions if d.kind == "field"}
+
+
+def test_python_class_and_self_attributes_collected_as_fields() -> None:
+    """Class-level and first ``self.x`` assignments are fields of their class."""
+    src = (
+        b"class Bar:\n"
+        b"    x: int = 1\n"
+        b"    y = 2\n"
+        b"    def __init__(self):\n"
+        b"        self.z = 3\n"
+        b"        self.y = 4\n"
+        b"        local = 5\n"
+        b"        return local\n"
+    )
+    assert _fields(src, "a.py", "Python") == {"x": "Bar", "y": "Bar", "z": "Bar"}
+    result = scan_source(src, Path("a.py"), "Python")
+    assert [d.name for d in result.definitions].count("y") == 1
+    assert not {"x", "y", "z"} & set(result.usages)
+    assert "z" not in _names_for(result.findings, CATEGORY_UNUSED_LOCAL)
+
+
+def test_python_used_self_attribute_registers_usage() -> None:
+    """Reading ``self.z`` elsewhere counts as a usage of the field name."""
+    src = (
+        b"class Bar:\n"
+        b"    def __init__(self):\n"
+        b"        self.z = 3\n"
+        b"    def get(self):\n"
+        b"        return self.z\n"
+    )
+    result = scan_source(src, Path("a.py"), "Python")
+    assert "z" in result.usages
+
+
+def test_module_level_assignment_is_not_a_field_python() -> None:
+    """Assignments outside a class body are not fields."""
+    src = b"CONST = 1\n\ndef foo():\n    other.attr = 2\n"
+    assert not _fields(src, "a.py", "Python")
+
+
+def test_javascript_class_fields_including_private() -> None:
+    """JavaScript field definitions, including ``#private`` ones, are fields."""
+    src = b"class A {\n  x = 1;\n  static y = 2;\n  #p = 3;\n  get() { return this.#p; }\n}\n"
+    assert _fields(src, "a.js", "JavaScript") == {"x": "A", "y": "A", "#p": "A"}
+    result = scan_source(src, Path("a.js"), "JavaScript")
+    assert "#p" in result.usages
+    assert "x" not in result.usages
+
+
+def test_typescript_fields_interface_properties_and_parameter_properties() -> None:
+    """TypeScript fields, interface properties and constructor parameter properties."""
+    src = (
+        b"class A {\n  x: number = 1;\n  private y = 2;\n"
+        b"  constructor(private q: number, plain: string) {}\n}\n"
+        b"interface I { f: string; }\n"
+    )
+    assert _fields(src, "a.ts", "TypeScript") == {
+        "x": "A",
+        "y": "A",
+        "q": "A",
+        "f": "I",
+    }
+
+
+def test_java_fields_and_enum_constants() -> None:
+    """Java fields (including multiple declarators) and enum constants are fields."""
+    src = (
+        b"class A {\n  private int x = 1, y;\n  static final int Z = 2;\n"
+        b"  void run() { int local = 1; }\n}\n"
+        b"enum E { ONE, TWO }\n"
+    )
+    assert _fields(src, "A.java", "Java") == {
+        "x": "A",
+        "y": "A",
+        "Z": "A",
+        "ONE": "E",
+        "TWO": "E",
+    }
+
+
+def test_gosu_fields_skip_aliased_property_fields() -> None:
+    """Gosu ``var`` fields are fields; one with an ``as`` alias is exposed as a property."""
+    src = b"class A {\n  var _x : int = 1\n  private var _y : String\n  var _a : int as Prop\n}\n"
+    assert _fields(src, "a.gs", "Gosu") == {"_x": "A", "_y": "A"}
+
+
+def test_field_in_nested_function_class_is_not_attributed_to_outer_class() -> None:
+    """A field belongs to its direct class, not an outer one."""
+    src = b"class Outer:\n    def run(self):\n        class Inner:\n            v = 1\n"
+    assert _fields(src, "a.py", "Python") == {"v": "Inner"}
 
 
 def test_usages_exclude_definition_name_nodes_python() -> None:

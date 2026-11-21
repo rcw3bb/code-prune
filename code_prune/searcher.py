@@ -3,8 +3,8 @@
 Symbols that are only referenced from files outside the scanned project
 (templates, configuration, other code bases) would otherwise be reported as
 unused. :class:`SymbolSearcher` checks such files purely textually, without
-parsing them. Both class and function/method names are matched with the same
-whole-word regular expression; a method defined inside a class is only
+parsing them. Class, function/method and field names are matched with the same
+whole-word regular expression; a method or field defined inside a class is only
 considered referenced when its own name *and* its enclosing class's name are
 both found in the same search file.
 
@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-
-from .scanner import SYMBOL_KIND_FUNCTION
 
 #: ``(name, kind, defining_file, enclosing_class)``. ``enclosing_class`` is
 #: ``None`` for classes and free functions.
@@ -98,24 +96,20 @@ class SymbolSearcher:
         """Return the *pending* candidates referenced in *text*.
 
         A plain class or free function matches once its own name is found. A
-        method (``enclosing_class`` set) additionally requires its enclosing
-        class's name to be found in the same *text*.
+        method or field (``enclosing_class`` set) additionally requires its
+        enclosing class's name to be found in the same *text*.
 
         Author: Ron Webb
         Since: 1.2.0
         """
         hits: set[Candidate] = set()
         for candidate in pending:
-            name, kind, defining_file, enclosing_class = candidate
+            name, _, defining_file, enclosing_class = candidate
             if _resolve(Path(defining_file)) == resolved_file:
                 continue
             if not _name_matches(text, name, patterns):
                 continue
-            if (
-                kind == SYMBOL_KIND_FUNCTION
-                and enclosing_class
-                and not _name_matches(text, enclosing_class, patterns)
-            ):
+            if enclosing_class and not _name_matches(text, enclosing_class, patterns):
                 continue
             hits.add(candidate)
         return hits

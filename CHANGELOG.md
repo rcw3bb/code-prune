@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.3.0 - 2026-11-16
+
+### Added
+
+- `unused-symbol` now also reports unused fields/attributes (kind `field`):
+  class-level fields in Python, JavaScript (including `#private`), TypeScript
+  (including interface properties and constructor parameter properties), Java
+  (including enum constants) and Gosu (`var` fields without an `as` alias), plus
+  Python `self.x = ...` attributes assigned in methods.
+- `--search-path` applies to fields with the same rule as methods: the field
+  name and its enclosing class's name must both be found in the same file.
+- `serialVersionUID` is ignored by the default `symbol_ignore`.
+
+### Changed
+
+- Private JavaScript/TypeScript property usages (`this.#x`) are now counted as
+  identifier usages.
+- `code_prune.log` now uses a `RotatingFileHandler` (10 MB per file, 10 backups)
+  with UTF-8 encoding, instead of an unbounded, platform-default-encoded
+  `FileHandler`.
+
 ## 1.2.0 - 2026-11-15
 
 ### Added

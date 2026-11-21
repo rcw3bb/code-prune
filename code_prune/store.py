@@ -231,7 +231,8 @@ class SessionStore:
     ) -> list[dict[str, object]]:
         """Return a finding for every definition never referenced elsewhere.
 
-        A definition is "unused" when its name never appears in the
+        A definition (class, function/method or field) is "unused" when its
+        name never appears in the
         project-wide ``identifiers`` table collected for *session_id*. Names
         matching any of *ignore_patterns* (e.g. dunder methods, ``main``,
         test hooks) are suppressed. When *searcher* is given, definitions that

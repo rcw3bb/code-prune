@@ -84,6 +84,16 @@ def test_method_class_and_name_must_be_in_same_search_file(tmp_path: Path) -> No
     assert found == set()
 
 
+def test_field_requires_both_class_and_field_name_in_same_file(tmp_path: Path) -> None:
+    """A field follows the method rule: field and class names must co-occur."""
+    both = _write(tmp_path / "both.txt", "config.Job.timeout")
+    field_only = _write(tmp_path / "field_only.txt", "timeout")
+    candidate = ("timeout", "field", "src.py", "Job")
+
+    assert SymbolSearcher([both]).find_referenced([candidate]) == {candidate}
+    assert SymbolSearcher([field_only]).find_referenced([candidate]) == set()
+
+
 def test_defining_file_is_ignored(tmp_path: Path) -> None:
     """The symbol's own file never counts as a reference."""
     own = _write(tmp_path / "own.py", "def orphan():\n    pass\n")

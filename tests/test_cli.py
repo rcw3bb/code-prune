@@ -600,6 +600,40 @@ def test_main_search_path_requires_class_and_method_together(tmp_path: Path) -> 
     assert _unused_symbol_names(out_dir) == set()
 
 
+def test_main_reports_unused_field_and_search_path_suppresses_it(
+    tmp_path: Path,
+) -> None:
+    """An unreferenced field is reported; class+field names in --search-path hide it."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "a.py").write_text(
+        "class Job:\n    retries = 3\n    def __init__(self):\n        self.timeout = 1\n"
+        "    def run(self):\n        return self.retries\n",
+        encoding="utf-8",
+    )
+    search = tmp_path / "search"
+    search.mkdir()
+    (search / "method_only.txt").write_text("run() timeout", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    args = [str(project), "--output-dir", str(out_dir), "--search-path", str(search)]
+
+    result = CliRunner().invoke(cli.main, [str(project), "--output-dir", str(out_dir)])
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"Job", "timeout", "run"}
+    data = json.loads((out_dir / "code-prune-output.json").read_text(encoding="utf-8"))
+    messages = {f["name"]: f["message"] for f in data["findings"]}
+    assert messages["timeout"] == "Field 'timeout' is never referenced."
+
+    result = CliRunner().invoke(cli.main, args)
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == {"Job", "timeout", "run"}
+
+    (search / "both.txt").write_text("Job timeout run", encoding="utf-8")
+    result = CliRunner().invoke(cli.main, args)
+    assert result.exit_code == 0
+    assert _unused_symbol_names(out_dir) == set()
+
+
 def test_main_search_ext_requires_search_path(tmp_path: Path) -> None:
     """--search-ext without --search-path is a usage error."""
     result = CliRunner().invoke(cli.main, [str(tmp_path), "--search-ext", "xml"])

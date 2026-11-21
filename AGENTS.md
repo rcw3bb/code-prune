@@ -22,8 +22,9 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
 - code_prune/symbol_ignore — bundled default regex symbol-name-ignore patterns (for unused-symbol findings)
 - code_prune/config.py — `Config` class reading `config.ini`
 - code_prune/parser.py — tree-sitter `Language`/`Parser` loader (Python, JavaScript, TypeScript, Java, Gosu)
-- code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + per-language node-type tables + all detectors (unreachable, unused, obsolete, todo-marker, commented-out) + `scan_file`
-- code_prune/searcher.py — `SymbolSearcher`: textual search of `--search-path` files to suppress unused-symbol findings (class = whole word, function = whole-word regex, own file skipped)
+- code_prune/language_tables.py — per-language tree-sitter node-type tables, `EXTENSION_TO_LANGUAGE`/`SUPPORTED_EXTENSIONS`
+- code_prune/scanner.py — `Finding`/`Definition`/`ScanResult` + all detectors (unreachable, unused, obsolete, todo-marker, commented-out, class/function/field definitions) + `scan_file`
+- code_prune/searcher.py — `SymbolSearcher`: textual search of `--search-path` files to suppress unused-symbol findings (whole-word regex; methods and fields also need their class name in the same file; own file skipped)
 - code_prune/store.py — SQLite `SessionStore` (findings/definitions/identifiers tables, cross-file unused-symbol aggregation)
 - code_prune/reporter.py — JSON/HTML `write_outputs` (per-category counts, HTML category dropdown)
 - code_prune/cli.py — Click CLI entry point (`code-prune` script, `code_prune.cli:main`); file discovery honours config ignore + target-level `.codepruneignore`
@@ -81,4 +82,7 @@ directory bootstrapping uses `env-dir-bootstrap` (`EnvDirBootstrap`), wired up i
   scratch DBs), and `SymbolSearcher`: a method candidate is only considered
   referenced when both its own name and its class name match in the same
   search file (learned 11/15).
-
+- Unused fields reuse the same pipeline with `Definition.kind == "field"`
+  (`_BindingCollector` in `scanner.py`; Python `self.x` is tracked via
+  `_Scope.owner_class`). Keep `scanner.py` under pylint's 1000-line limit by
+  putting pure-data tables in `language_tables.py` (learned 11/16).

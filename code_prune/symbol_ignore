@@ -16,3 +16,4 @@
 ^toString$
 ^equals$
 ^hashCode$
+^serialVersionUID$
