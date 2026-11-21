@@ -34,12 +34,12 @@ from . import CONF_DIR
 from . import PATH_IGNORE_PATH
 from . import SYMBOL_IGNORE_PATH
 from .config import Config
+from .language_tables import SUPPORTED_EXTENSIONS
 from .reporter import write_outputs
 from .scanner import (
     CATEGORY_UNUSED_ALIAS,
     CATEGORY_UNUSED_SYMBOL,
     CLI_CATEGORIES,
-    SUPPORTED_EXTENSIONS,
     UNUSED_CATEGORIES,
     load_name_ignore_patterns,
     scan_file,
